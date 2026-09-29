@@ -7,3 +7,4 @@
 /hw-diagnostic-toolkit.iso
 *.log
 __pycache__/
+.impeccable/questions/

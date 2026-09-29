@@ -60,6 +60,26 @@ set_theme() {
     "Every screen from here on uses it."
 }
 
+look_label() {
+  case "$1" in
+    classic) printf 'Classic tiles - the look of 1.0 to 1.12' ;;
+    *)       printf 'Service manual - drawing sheet with a parts list' ;;
+  esac
+}
+
+# Home screen and menus only; test screens look the same either way.
+set_look() {
+  local cur; cur=$(get look manual)
+  tui_menu "Menu style" "currently: $(look_label "$cur")" \
+    "Service manual|drawing frame, numbered callouts, results in a parts list" \
+    "Classic tiles|white tiles on grey, as before 1.13" || return
+  local v
+  case "$TUI_CHOICE" in 1) v=manual ;; 2) v=classic ;; esac
+  put look "$v"
+  tui_setting look "$v"
+  tui_msg "Menu style changed" "Now using: $(look_label "$v")"
+}
+
 set_text_size() {
   local cur; cur=$(get textscale 1.0)
   tui_menu "Text size" "currently: $(scale_label "$cur")" \
@@ -143,6 +163,7 @@ reset_all() {
   rm -f "$SETTINGS"
   printf 'compact\n' > "$RUN_DIR/layout"
   tui_setting theme light
+  tui_setting look manual
   tui_setting textscale 1.0
   tui_msg "Reset" "Everything is back to its default."
 }
@@ -165,6 +186,7 @@ show_about() {
 while :; do
   tui_menu "System settings" "arrows + Enter, Q to go back" \
     "Colour theme|$(theme_label "$(get theme light)")" \
+    "Menu style|$(look_label "$(get look manual)")" \
     "Text size|$(scale_label "$(get textscale 1.0)")" \
     "Opening menu|$(cat "$RUN_DIR/layout" 2>/dev/null || echo compact)" \
     "Wireless test length|$(secs_ms "$(get wifi_secs 600)")" \
@@ -174,12 +196,13 @@ while :; do
     "Reset everything|back to defaults" || break
   case "$TUI_CHOICE" in
     1) set_theme ;;
-    2) set_text_size ;;
-    3) set_layout_default ;;
-    4) set_wifi_default ;;
-    5) set_disk_default ;;
-    6) save_to_stick ;;
-    7) show_about ;;
-    8) reset_all ;;
+    2) set_look ;;
+    3) set_text_size ;;
+    4) set_layout_default ;;
+    5) set_wifi_default ;;
+    6) set_disk_default ;;
+    7) save_to_stick ;;
+    8) show_about ;;
+    9) reset_all ;;
   esac
 done

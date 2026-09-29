@@ -11,6 +11,10 @@
 . /opt/diag/lib.sh
 . /opt/diag/tui.sh
 
+# This page is what the header's Wi-Fi icon opens; clicking the icon while
+# already here must not open a second copy inside it.
+export DIAG_IN_WIFI=1
+
 WPA_CONF=$RUN_DIR/wpa.conf
 WPA_LOG=$RUN_DIR/wpa.log
 SCAN_CACHE=$RUN_DIR/wifi_scan
@@ -81,67 +85,57 @@ wifi_scan_progress() {   # attempt last-error
 }
 
 # ---------------------------------------------------------------- connecting
-do_connect() {   # iface ssid enc
-  local i=$1 ssid=$2 enc=$3
-
-  if [ "$enc" = open ]; then
-    printf 'network={\n\tssid="%s"\n\tkey_mgmt=NONE\n}\n' "$ssid" > "$WPA_CONF"
-  else
-    tui_input "Wi-Fi password" "Password for $ssid (blank to cancel):"
-    [ -z "$TUI_TEXT" ] && return 1
-    if command -v wpa_passphrase >/dev/null; then
-      wpa_passphrase "$ssid" "$TUI_TEXT" > "$WPA_CONF" 2>/dev/null
-    else
-      printf 'network={\n\tssid="%s"\n\tpsk="%s"\n}\n' "$ssid" "$TUI_TEXT" > "$WPA_CONF"
-    fi
-    TUI_TEXT=""
-  fi
-  chmod 600 "$WPA_CONF" 2>/dev/null
-
+JOIN_NAME=""
+wifi_join_progress() {   # called by wifi_join in lib.sh
   tui_frame "Wi-Fi" "connecting"
-  tui_line 8 "Associating with $ssid..." ""
+  tui_line 8  "Connecting to $JOIN_NAME" ""
+  tui_line 10 "$1" muted
   tui_flush
+}
 
-  pkill -x wpa_supplicant 2>/dev/null
-  sleep 1
-  ip link set "$i" up 2>/dev/null
-  wpa_supplicant -B -i "$i" -c "$WPA_CONF" -f "$WPA_LOG" 2>/dev/null
+do_connect() {   # iface ssid(as scanned) enc
+  local i=$1 ssid=$2 enc=$3 pass=""
+  JOIN_NAME=$(wifi_ssid_show "$ssid")
 
-  local n
-  for n in $(seq 1 25); do
-    sleep 1
-    [ -n "$(wifi_link_ssid "$i")" ] && break
-    tui_line 10 "waiting for the access point... ${n}s" muted; tui_flush
-  done
-  if [ -z "$(wifi_link_ssid "$i")" ]; then
-    local why="the access point did not reply"
-    grep -qi 'WRONG_KEY\|4-Way Handshake failed' "$WPA_LOG" 2>/dev/null \
-      && why="the password was rejected"
-    tui_msg "Could not connect" "Joining $ssid failed - $why."
+  case "$enc" in
+    open|OWE) ;;
+    Enterprise)
+      tui_msg "Company network" "$JOIN_NAME uses 802.1X sign-in (username and certificate)." "" \
+        "The toolkit only joins password networks. Pick another one, or use a cable."
+      return 1 ;;
+    *)
+      tui_input "Wi-Fi password" "Password for $JOIN_NAME (blank to cancel):"
+      [ -z "$TUI_TEXT" ] && return 1
+      pass=$TUI_TEXT; TUI_TEXT="" ;;
+  esac
+
+  wifi_join_progress "starting..."
+  if ! wifi_join "$i" "$ssid" "$enc" "$pass"; then
+    # A half-made link (joined, no address) would make this page and the
+    # wireless test believe the machine is online.
+    wifi_leave "$i"
+    tui_msg "Could not connect" "Joining $JOIN_NAME failed:" "" "$WIFI_JOIN_ERR." "" \
+      "Every step is in the Toolkit log on the power menu (Q on the home screen)."
     return 1
   fi
-
-  tui_line 10 "associated, asking for an address..." ""; tui_flush
-  dhclient -1 -timeout 20 "$i" 2>/dev/null &
-  for n in $(seq 1 22); do
-    sleep 1
-    ip -4 addr show "$i" 2>/dev/null | grep -q 'inet ' && break
-  done
-  wait 2>/dev/null
-
-  if ! ip -4 addr show "$i" 2>/dev/null | grep -q 'inet '; then
-    tui_msg "No address" "Joined $ssid but the network gave out no address." \
-      "" "The link is up; DHCP on that network is not answering."
-    return 1
-  fi
-  printf '%s\t%s\n' "$i" "$ssid" > "$STATE_FILE"
+  printf '%s\t%s\n' "$i" "$JOIN_NAME" > "$STATE_FILE"
   return 0
+}
+
+# Signal in words as well as dBm - a technician reads "weak" faster than -78.
+signal_words() {
+  local r=$1
+  if   [ "$r" -ge -55 ]; then printf 'excellent'
+  elif [ "$r" -ge -67 ]; then printf 'good'
+  elif [ "$r" -ge -75 ]; then printf 'fair'
+  else printf 'weak'
+  fi
 }
 
 # ---------------------------------------------------------------- screens
 status_screen() {
   local i=$1 ssid ip4 gw sig
-  ssid=$(wifi_link_ssid "$i")
+  ssid=$(wifi_ssid_show "$(wifi_link_ssid "$i")")
   ip4=$(ip -4 addr show "$i" 2>/dev/null | awk '/inet /{print $2; exit}')
   gw=$(ip route 2>/dev/null | awk '$1=="default"{print $3; exit}')
   sig=$(iw dev "$i" link 2>/dev/null | awk '/signal:/{print $2; exit}')
@@ -173,24 +167,25 @@ pick_and_connect() {   # iface
     return 1
   fi
 
-  local -a vals=() labels=()
+  # One "|" field per column; the renderer lines each column up across rows.
+  # Padding with spaces never did - the font is proportional, which is why the
+  # dBm column wandered from row to row.
+  local -a ssids=() encs=() labels=()
   local rssi freq enc ssid
   while IFS=$'\t' read -r rssi freq enc ssid; do
     [ "$ssid" = "(hidden)" ] && continue
-    vals+=("$ssid|$enc")
-    labels+=("$(printf '%-24.24s %5s dBm  %-13s %s' "$ssid" "$rssi" "$(freq_band "$freq")" "$enc")")
-    [ ${#vals[@]} -ge 20 ] && break      # strongest 20 - the list is sorted by signal
+    ssids+=("$ssid"); encs+=("$enc")
+    labels+=("$(wifi_ssid_show "$ssid")|$rssi dBm  $(signal_words "$rssi")|$(freq_band "$freq")|$enc")
+    [ ${#ssids[@]} -ge 30 ] && break     # strongest 30 - the list is sorted by signal
   done < "$SCAN_CACHE"
-  [ ${#vals[@]} -eq 0 ] && { tui_msg "Nothing to join" "Only hidden networks were found."; return 1; }
+  [ ${#ssids[@]} -eq 0 ] && { tui_msg "Nothing to join" "Only hidden networks were found."; return 1; }
 
-  tui_menu "Choose a network" "arrows + Enter, Q to go back" "${labels[@]}" || return 1
-  local pick=${vals[$((TUI_CHOICE-1))]}
-  do_connect "$i" "${pick%|*}" "${pick##*|}"
+  tui_menu "Choose a network" "arrows + Enter to join, Q to go back" "${labels[@]}" || return 1
+  do_connect "$i" "${ssids[$((TUI_CHOICE-1))]}" "${encs[$((TUI_CHOICE-1))]}"
 }
 
 disconnect_now() {   # iface
-  pkill -x wpa_supplicant 2>/dev/null
-  ip addr flush dev "$1" 2>/dev/null
+  wifi_leave "$1"
   ip link set "$1" down 2>/dev/null
   rm -f "$STATE_FILE" "$WPA_CONF"
   tui_msg "Disconnected" "The wireless link has been taken down."
@@ -241,7 +236,7 @@ main() {
   [ "$block" = "soft blocked" ] && rfkill unblock wifi 2>/dev/null
 
   while :; do
-    local cur; cur=$(wifi_link_ssid "$IFACE")
+    local cur; cur=$(wifi_ssid_show "$(wifi_link_ssid "$IFACE")")
     if [ -n "$cur" ]; then
       tui_menu "Wi-Fi - connected to $cur" "arrows + Enter, Q to go back" \
         "Connection details|address, gateway, signal" \

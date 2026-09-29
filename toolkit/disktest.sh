@@ -769,12 +769,14 @@ while :; do
     "Benchmark, read only|raw device, burst speed - safe on customer data" \
     "Benchmark, raw read + write|burst speed both ways - DESTROYS ALL DATA" \
     "Install simulation|sustained write past the cache - DESTROYS ALL DATA" \
-    "Surface read scan|reads every sector looking for unreadable ones" || break
+    "Surface read scan|reads every sector looking for unreadable ones" \
+    "Drive self-test|NVMe or SATA - the drive checks itself, data is safe" || break
   case "$TUI_CHOICE" in
     1) test_smart ;;
     2) test_read_only ;;
     3) test_raw_rw ;;
     4) /opt/diag/installsim.sh ;;
     5) test_surface ;;
+    6) /opt/diag/selftest.sh ;;
   esac
 done

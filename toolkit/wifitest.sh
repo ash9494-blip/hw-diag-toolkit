@@ -132,13 +132,15 @@ scan_screen() {
   tui_kv 6 "Access points heard" "$n"
   tui_kv 7 "Strongest signal"    "$best dBm  ($(rssi_verdict "$best"))" \
          "$( [ "${best:-0}" -ge -67 ] && echo ok || echo warn )"
+  # A real table: the renderer lines the columns up. Space-padding a
+  # proportional font never did.
   local row=9 rssi freq enc ssid
-  tui_line $row "$(printf '%-26s %8s  %-14s %s' SSID SIGNAL BAND SECURITY)" muted
+  tui_thead $row "Network" "Signal" "Quality" "Band" "Security"
   row=$((row+1))
   while IFS=$'\t' read -r rssi freq enc ssid; do
     [ $row -gt 21 ] && break
-    tui_line $row "$(printf '%-26.26s %5s dBm  %-14s %s' "$ssid" "$rssi" "$(freq_band "$freq")" "$enc")" \
-      "$( [ "$rssi" -ge -75 ] && echo "" || echo muted )"
+    tui_trow $row "$(wifi_ssid_show "$ssid")" "$rssi dBm" "$(rssi_verdict "$rssi")" \
+      "$(freq_band "$freq")" "$enc"
     row=$((row+1))
   done < "$SCAN_CACHE"
   [ "${best:-0}" -lt -75 ] && tui_line $((row+1)) \
@@ -158,7 +160,7 @@ require_link() {   # -> 0 when there is a live wireless link to watch
   for i in $(wifi_ifaces); do
     [ -n "$(link_ssid "$i")" ] || continue
     IFACE=$i
-    SSID=$(link_ssid "$i")
+    SSID=$(wifi_ssid_show "$(link_ssid "$i")")
     IPADDR=$(ip -4 addr show "$i" 2>/dev/null | awk '/inet /{print $2; exit}')
     GATEWAY=$(ip route 2>/dev/null | awk -v d="$i" '$1=="default" && $0 ~ d {print $3; exit}')
     [ -z "$GATEWAY" ] && GATEWAY=$(ip route 2>/dev/null | awk '$1=="default"{print $3; exit}')
@@ -178,88 +180,6 @@ no_link_screen() {
   tui_line 16 "proves the radio and both antennas are alive." muted
   tui_flush
   tui_anykey
-}
-
-pick_network() {
-  local -a ss=() labels=()
-  local rssi freq enc ssid
-  while IFS=$'\t' read -r rssi freq enc ssid; do
-    [ "$ssid" = "(hidden)" ] && continue
-    ss+=("$ssid|$enc")
-    labels+=("$(printf '%-24.24s %5s dBm  %-13s %s' "$ssid" "$rssi" "$(freq_band "$freq")" "$enc")")
-  done < "$SCAN_CACHE"
-  [ ${#ss[@]} -eq 0 ] && { tui_msg "Nothing to join" "No named networks were found."; return 1; }
-  tui_menu "Choose a network" "arrows + Enter, Q to skip the connected tests" "${labels[@]}" || return 1
-  local pick=${ss[$((TUI_CHOICE-1))]}
-  SSID=${pick%|*}; ENC=${pick##*|}
-  return 0
-}
-
-connect_wifi() {   # iface
-  local i=$1
-  if [ "$ENC" = open ]; then
-    cat > "$WPA_CONF" <<EOF
-network={
-	ssid="$SSID"
-	key_mgmt=NONE
-}
-EOF
-  else
-    tui_input "Wi-Fi password" "Password for $SSID (leave blank to cancel):"
-    [ -z "$TUI_TEXT" ] && return 1
-    # wpa_passphrase keeps the plaintext out of the file where it can.
-    if command -v wpa_passphrase >/dev/null; then
-      wpa_passphrase "$SSID" "$TUI_TEXT" > "$WPA_CONF" 2>/dev/null
-    else
-      cat > "$WPA_CONF" <<EOF
-network={
-	ssid="$SSID"
-	psk="$TUI_TEXT"
-}
-EOF
-    fi
-    TUI_TEXT=""
-  fi
-  chmod 600 "$WPA_CONF" 2>/dev/null
-
-  tui_frame "Wireless - connecting" "please wait"
-  tui_line 8 "Associating with $SSID..." ""
-  tui_flush
-
-  pkill -x wpa_supplicant 2>/dev/null
-  sleep 1
-  ip link set "$i" up 2>/dev/null
-  wpa_supplicant -B -i "$i" -c "$WPA_CONF" -f "$WPA_LOG" 2>/dev/null
-  OWNED_IFACE=1
-
-  local n
-  for n in $(seq 1 25); do
-    sleep 1
-    [ -n "$(link_bssid "$i")" ] && break
-    tui_line 10 "waiting for association... ${n}s" muted
-    tui_flush
-  done
-  if [ -z "$(link_bssid "$i")" ]; then
-    local why="no reply from the access point"
-    grep -qi 'WRONG_KEY\|4-Way Handshake failed' "$WPA_LOG" 2>/dev/null && why="the password was rejected"
-    tui_msg "Could not connect" "Association with $SSID failed - $why." "" \
-      "The radio and antennas are still proven by the scan above."
-    return 1
-  fi
-
-  tui_line 10 "associated, asking for an address..." ""
-  tui_flush
-  dhclient -1 -timeout 20 "$i" 2>/dev/null &
-  local dh=$!
-  for n in $(seq 1 22); do
-    sleep 1
-    [ -n "$(ip -4 addr show "$i" 2>/dev/null | awk '/inet /{print $2}')" ] && break
-  done
-  wait $dh 2>/dev/null
-  IPADDR=$(ip -4 addr show "$i" 2>/dev/null | awk '/inet /{print $2; exit}')
-  GATEWAY=$(ip route 2>/dev/null | awk -v d="$i" '$1=="default" && $0 ~ d {print $3; exit}')
-  [ -z "$GATEWAY" ] && GATEWAY=$(ip route 2>/dev/null | awk '$1=="default"{print $3; exit}')
-  return 0
 }
 
 # How long to watch.

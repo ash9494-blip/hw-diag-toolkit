@@ -25,6 +25,24 @@ for t in iw wpa_supplicant rfkill curl dhclient; do
     || { echo "BUILD ABORTED - $t did not install into the image" >&2; exit 1; }
 done
 echo "wifi tooling present: iw wpa_supplicant rfkill curl dhclient"
+# A second DHCP client, tried when dhclient gets no address. Installed on its
+# own line because it lives in universe: if it is ever unavailable, that must
+# not take the whole package list above down with it.
+chroot $C apt-get install -y --no-install-recommends udhcpc >/dev/null 2>&1 \
+  && echo "backup DHCP client present: udhcpc" \
+  || echo "WARN: udhcpc not installed - wifi falls back to dhclient only" >&2
+
+# The touchpad driver chain. All of it ships in linux-modules(-extra); this is
+# here so a future trim can never quietly take a link out - a missing one
+# looks, on the bench, like a dead touchpad.
+K=$(basename "$(ls -1 $C/boot/vmlinuz-* | sort | tail -1)" | sed 's/vmlinuz-//')
+for m in drivers/hid/i2c-hid/i2c-hid-acpi drivers/hid/hid-multitouch \
+         drivers/mfd/intel-lpss-pci drivers/pinctrl/intel/pinctrl-tigerlake \
+         drivers/input/mouse/psmouse drivers/input/mouse/elan_i2c; do
+  ls $C/usr/lib/modules/$K/kernel/$m.ko* >/dev/null 2>&1 \
+    || { echo "BUILD ABORTED - touchpad driver missing from the image: $m" >&2; exit 1; }
+done
+echo "touchpad driver chain present"
 
 # Every font the renderer asks for must actually exist.
 #
@@ -167,6 +185,12 @@ esac
 EOF
 
 # ---- misc system config ----
+# The hardware clock holds LOCAL time. Every machine on this bench comes from
+# Windows, which keeps the RTC in local time. Without this Linux reads it as
+# UTC: the header clock showed 8 hours ahead (the image's zone is UTC+8), and
+# once Wi-Fi let timesyncd set the true time, the kernel would write UTC back
+# into the RTC - leaving the customer's Windows clock 8 hours out.
+printf '0.0 0 0.0\n0\nLOCAL\n' > $C/etc/adjtime
 echo "diagtool" > $C/etc/hostname
 cat > $C/etc/hosts <<'EOF'
 127.0.0.1 localhost diagtool

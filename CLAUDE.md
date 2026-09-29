@@ -5,8 +5,8 @@ Bootable USB/ISO for bench-testing laptops at Data Dynamics (Johor). Owner: Ash
 minimal Ubuntu live system straight into a full-screen tile menu of hardware
 tests, and writes a per-machine report to the USB stick.
 
-**Current version: 1.11.0** (`toolkit/lib.sh` → `DIAG_VERSION`).
-Last delivered ISO SHA256 `8d17bda0b035863ac2790382465034e4795dcd32c03e505bb437f09bbecd2c75`.
+**Current version: 1.13.0** (`toolkit/lib.sh` → `DIAG_VERSION`).
+Last delivered ISO: 1.11.0, SHA256 `8d17bda0b035863ac2790382465034e4795dcd32c03e505bb437f09bbecd2c75`.
 Version history and the reasoning behind past changes: `docs/HISTORY.md`.
 
 ## Layout
@@ -103,6 +103,11 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   Rows 6..~20 at normal text size.
 - Protocol to ui.py is one TAB-separated line per command over a FIFO — no
   TABs or newlines inside arguments. Menu entries are `label|description`.
+- Input: `Keyboard.poll` also yields pointer events `click` (at `click_xy`),
+  `back`, `hover`, `wheelup`/`wheeldown`. Any new widget loop must handle or
+  ignore them, redraw only on change, and full-screen tests must run through
+  `fullscreen()` in main (pointer off, no header refresh). `menu`/`gridmenu`
+  can answer `wifi`; tui.sh handles it — don't treat it as a choice.
 - Report: `rsection`, `rsilent` → `/run/diag/report.txt`; one `RESULT:` line per
   test; `set_kv KEY value` → `summary.kv`.
 - Comments explain *why* (usually the bug that forced it). Keep that style.
@@ -134,22 +139,42 @@ radio, touchpad or battery. Say so when something is only VM-verified.
 - `find -L /sys` hangs (circular symlinks) — use bounded globs.
 - `pkill -f qemu...` kills your own shell; kill by pid (see boot-vm.sh).
 - bash `read` with whitespace IFS collapses empty fields — use `|`.
+- A bare `exec` with redirections is permanent: `exec 8>&- 2>/dev/null` in
+  lib.sh silenced stderr in every script and broke the Command prompt shell
+  (1.11-1.12.0). Close fds with `exec 8>&-` alone.
+- Device-name matching must use word starts: "alps" matched QEMU's
+  "VirtuALPS/2 VMware VMMouse" and made the mouse a "touchpad" (pointer dead,
+  touchpad test found a pad in the VM). `\b(alps|elan|...)` in Pointer._devices.
+- In the VM, the active mouse is the absolute vmmouse: HMP `mouse_move` does
+  nothing visible; drive the pointer with QMP `input-send-event` type `abs`.
+  Esc/right-click on the home grid opens the power menu, where "1" = Reboot -
+  scripted key sequences have rebooted the VM into MemTest86+ twice.
+- Ubuntu's `dhclient` has no `-timeout` (Fedora patch) — wrap it in
+  `timeout N` instead. Never `2>/dev/null` a network tool; log it.
+- `iw link` shows the SSID before the WPA handshake completes; use
+  `wifi_wpa_state` (wpa_cli) for "connected".
+- Never space-pad columns for the renderer (proportional font): pass menu
+  cells as `name|col|col` or use `tui_thead`/`tui_trow`.
 
 ## Open items
 
-- **Wi-Fi on the real AX201 (`wlo1`)**: the old build sat on "Scanning"; 1.11
-  added timeout/retry/visible error, but the root cause is unconfirmed on real
-  hardware. Ask Ash for the on-screen message / Toolkit log if it recurs.
+- **Wi-Fi on the real AX201 (`wlo1`)**: 1.11 scanning works on the A40-J
+  (attempt 1 timed out, attempt 2 found 26 APs). 1.12 fixes the "no address"
+  failure (dhclient `-timeout` bug); joining is not yet re-verified on the
+  real card. Ask Ash for the Toolkit log "wireless connections" section.
+- **Touchpad on the TECRA A40-J** reported "not found". Drivers are all in
+  the image; 1.12's driver search will say whether the firmware lists it,
+  disables it, or it is silent on I2C. Get that screen / log from Ash.
 - Never verified on real hardware: touchscreen test, USB-C/PD reporting (needs
   UCSI), PCIe gen readout, two-finger right-click, run-from-RAM on a real stick,
-  install simulation.
+  install simulation, screen test. (Drive self-test: confirmed OK by Ash.)
 - Two-digit tile numbers wait only 0.7 s for the second digit (`_pick_number`).
 - Stress test elapsed display lags the progress bar (cosmetic).
 - WinPE companion ISO for SetDmiAll (Ash is installing the Windows ADK + WinPE
   add-on): build script not yet written. It must take the path to Ash's own
   extracted SetDmiAll folder; TVALZ.sys needs Secure Boot off.
-- Ideas raised but not built: screen dead-pixel test, NVMe self-test, fan RPM,
-  keyboard LED test, idle gaps inside the install simulation.
+- Ideas raised but not built: fan RPM, keyboard LED test, idle gaps inside
+  the install simulation.
 
 ## Delivering to Ash
 

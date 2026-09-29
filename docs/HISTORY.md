@@ -3,6 +3,82 @@
 Newest first. Each entry says what changed and why; the "why" is usually a
 real machine on Ash's bench.
 
+## 1.13.0 — 2026-09-29
+- **Mouse.** A pointer driven by a USB mouse, the touchpad or the
+  touchscreen. Left click / tap selects tiles, menu rows and YES / NO;
+  right click or a two-finger tap goes back (like Esc); wheel or two-finger
+  drag scrolls. Hovering highlights. Devices are read un-grabbed, so the
+  touchpad/mouse tests still grab theirs; the pointer is switched off during
+  full-screen tests (on the black screen-test page it would pass for a stuck
+  pixel). A scrolled list's window now only moves when the selection leaves
+  it, so it no longer slides under the pointer. Password entry ignores it.
+- **Header status:** clock (HH:MM over the date) and a Wi-Fi icon - signal
+  bars when online, amber when joined without an address, grey when not
+  connected, struck through when off or no adapter. Read from sysfs/procfs
+  every 3 s, redrawn while menus wait. Click the icon (or press W) in any
+  menu to open the Wi-Fi page; the same menu comes back afterwards.
+- `/etc/adjtime` = LOCAL: the hardware clock on these (Windows) machines is
+  local time. Without it the clock read 8 h ahead, and after an NTP sync the
+  kernel would have written UTC into the customer's RTC.
+- **Service-manual look for the home grid and menus** (Ash chose it from
+  preview renders over "Bench Mat"; Settings -> Menu style switches back to
+  the classic tiles). A drawing frame with zone markers; a title block with
+  the machine (model over CPU and RAM - kept at Ash's request, the memory
+  figure is never the part shortened), revision, date, time and Wi-Fi; each
+  test a line-art part with a numbered balloon; a parts list showing every
+  test's result this session ("PASS 14:02") from summary.kv via
+  `test_result`; menus as tables. The theme accent is the only selection
+  colour, so light, dark and high contrast all work. Test screens unchanged.
+- Absolute mice (USB tablets, KVMs, VMware/QEMU vmmouse) move the pointer.
+- Includes 1.12.1 (the Command prompt fix), which was never shipped alone.
+
+## 1.12.1 — 2026-09-29
+- **Command prompt had no prompt.** On the A40-J it showed no `diag:` prompt,
+  echoed arrow keys as `^[[A` and printed no errors. Cause, since 1.11: lib.sh
+  closed fd 8 with `exec 8>&- 2>/dev/null`; a bare exec makes the stderr
+  redirect permanent, so every script ran with stderr in /dev/null and the
+  shell decided it was not interactive. Now `exec 8>&-` only, and both shell
+  entries start `bash -i` with stderr on the terminal. (It also means error
+  messages from every script are visible again.)
+- Touchpad driver search logs the input-device list and HID driver bindings,
+  and the whole search goes into the report. A40-J result so far: "every
+  touch device has its driver, none is a touchpad" - the pad is attached but
+  not recognised; waiting on that log to fix the classification.
+- NVMe self-test confirmed working on real hardware (Ash).
+
+## 1.12.0 — 2026-09-29
+- **Wi-Fi now gets an address.** Trigger: TECRA A40-J (AX201) joined but
+  "DHCP gave no address" every time. Root cause: `dhclient -timeout` is a
+  Fedora-only option; Ubuntu's dhclient answers "Unknown command" and exits,
+  and `2>/dev/null` hid it. Joining moved to `wifi_join` in lib.sh: waits for
+  wpa_supplicant's COMPLETED state (not `iw link`, which shows the SSID before
+  the WPA handshake), recognises a wrong password, runs DHCP with a hard
+  limit and a retry, then `udhcpc` as a backup client. Every step goes to the
+  Toolkit log ("wireless connections"). Password length is checked up front;
+  the SSID goes to wpa_supplicant as hex, so quotes/non-ASCII names work.
+- Scan reads the real security from the AKM suites: WPA2, WPA3, WPA2/3,
+  Enterprise (refused with a clear message), OWE, WEP, open. `\x00...` SSIDs
+  count as hidden; escaped UTF-8 names display properly.
+- **Menus with columns.** Entries may carry several `|` cells; the renderer
+  aligns them. Row height comes from the font, so the highlight can no longer
+  slice the selected row; long lists scroll with an "11-22 of 26" counter.
+  Wi-Fi list: name | dBm + quality word | band | security. Wireless test scan
+  uses a real table. Toolkit log shows `|` instead of raw TABs.
+- **Screen test** (Peripherals, tile "Screen"): black, white, R, G, B, grey,
+  dark grey, grey ramp, full screen with a fading hint; operator records dead
+  / stuck pixels, lines, blotches, bleed, banding.
+- **Drive self-test** (HDD / SSD menu): NVMe Device Self-test (and SATA) via
+  smartctl, short or extended (drive's own EDSTT estimate), live progress,
+  Q aborts, result decoded per the NVMe spec; checks OACS for support.
+- **Touchpad not found** now searches instead of giving up. Checked the 1.11
+  image: every touchpad driver (i2c-hid-acpi, hid-multitouch, intel-lpss,
+  pinctrl-tigerlake, psmouse, elan_i2c, rmi4) is already there, so nothing
+  can be "downloaded like Windows". The test loads the chain, binds loose
+  PNP0C50 devices by hand, and explains what it found (not listed → BIOS /
+  Fn key / cable; disabled by firmware; listed but silent on I2C). Build
+  aborts if any link of that chain goes missing.
+- Removed the unused second copy of the connect code from wifitest.sh.
+
 ## 1.11.0 — 2026-09-25
 - **Run from RAM** boot entry (`toram`, BIOS "run from RAM" / UEFI "load into
   RAM (USB stick can be removed)"). Copies the ~390 MB squashfs into RAM; the

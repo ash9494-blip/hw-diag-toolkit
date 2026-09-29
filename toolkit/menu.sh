@@ -180,10 +180,16 @@ power_menu() {
     2) stop_ui; clear; echo "Powering off..."; sync; poweroff -f ;;
     3) stop_ui; clear
        echo "Type 'exit' to return to the toolkit."
-       PS1='diag:\w# ' bash --norc 8>&-
+       PS1='diag:\w# ' bash --norc -i 8>&- 2>/dev/tty
        exec /opt/diag/menu.sh ;;
     4) if [ -s "$RUN_DIR/ui.log" ] || [ -s "$RUN_DIR/wifi_scan.log" ]; then
-         { if [ -s "$RUN_DIR/wifi_scan.log" ]; then
+         { if [ -s "$RUN_DIR/wifi_join.log" ]; then
+             echo "=== wireless connections ==="; cat "$RUN_DIR/wifi_join.log"; echo
+           fi
+           if [ -s "$RUN_DIR/drivers.log" ]; then
+             echo "=== driver search ==="; cat "$RUN_DIR/drivers.log"; echo
+           fi
+           if [ -s "$RUN_DIR/wifi_scan.log" ]; then
              echo "=== wireless scans ==="; cat "$RUN_DIR/wifi_scan.log"; echo
            fi
            echo "=== interface ==="; cat "$RUN_DIR/ui.log" 2>/dev/null
@@ -214,8 +220,10 @@ drop_to_shell() {
   stop_ui; clear
   printf '\n  Hardware Diagnostic Toolkit - command prompt\n'
   printf '  Type "exit" to return to the menu.\n\n'
-  # without the lock fd, so nothing started from the prompt can hold it
-  PS1='diag:\w# ' bash --norc 8>&-
+  # without the lock fd, so nothing started from the prompt can hold it.
+  # -i and stderr on the terminal: a shell that inherits a redirected stderr
+  # decides it is not interactive - no prompt, arrow keys printed as ^[[A.
+  PS1='diag:\w# ' bash --norc -i 8>&- 2>/dev/tty
   exec /opt/diag/menu.sh
 }
 
@@ -230,6 +238,7 @@ run_test() {   # one dispatcher, so both layouts stay in step
     keyboard) /opt/diag/keyboard.sh ;;
     touchpad) /opt/diag/touchpad.sh ;;
     touchscreen) /opt/diag/touchscreen.sh ;;
+    screen)   /opt/diag/screentest.sh ;;
     wireless) /opt/diag/wifitest.sh ;;
     wificonnect) /opt/diag/wificonnect.sh ;;
     shell)    drop_to_shell ;;
@@ -248,15 +257,22 @@ run_test() {   # one dispatcher, so both layouts stay in step
 }
 
 peripherals_menu() {
-  local acts=(all touchpad touchscreen sound usb camera network wireless firmware)
+  local acts=(all screen touchpad touchscreen sound usb camera network wireless firmware)
   while :; do
     tui_grid "Peripherals" "arrows to move, Enter to select      Q = back" \
-      "Run them all|grid" "Touchpad|touchpad" "Touchscreen|touchscreen" "Sound|sound" \
-      "USB ports|usb" "Camera|camera" "Ethernet Network|network" "Wireless test|wifi" \
+      "Run them all|grid" \
+      "Screen|screen|$(test_result SCREEN_RESULT)" \
+      "Touchpad|touchpad|$(test_result TOUCHPAD_RESULT)" \
+      "Touchscreen|touchscreen|$(test_result TOUCHSCREEN_RESULT)" \
+      "Sound|sound|$(test_result SOUND_RESULT)" \
+      "USB ports|usb|$(test_result USB_RESULT)" \
+      "Camera|camera|$(test_result CAMERA_RESULT)" \
+      "Ethernet Network|network|$(test_result ETHERNET_RESULT)" \
+      "Wireless test|wifi|$(test_result WIFI_RESULT)" \
       "Get firmware|download" || return
     if [ "${acts[$((TUI_CHOICE-1))]}" = all ]; then
       local t
-      for t in touchpad touchscreen sound usb camera network wireless; do run_test "$t"; done
+      for t in screen touchpad touchscreen sound usb camera network wireless; do run_test "$t"; done
     else
       run_test "${acts[$((TUI_CHOICE-1))]}"
     fi
@@ -266,8 +282,13 @@ peripherals_menu() {
 compact_menu() {
   local acts=(fullrun disk cpu ram battery keyboard peripherals wificonnect system board dmi results save shell settings showall)
   tui_grid "Choose a test" "arrows or its number (two digits for 10+), Enter to select      Q = power menu" \
-    "Full run|play" "HDD / SSD|disk" "CPU|cpu" "RAM|ram" "Battery|battery" \
-    "Keyboard|keyboard" "Peripherals|grid" "Wi-Fi|wifi" "System|info" "Machine details|pencil" \
+    "Full run|play" \
+    "HDD / SSD|disk|$(test_result DISK_RESULT DISK_SELFTEST DISK_SMART)" \
+    "CPU|cpu|$(test_result CPU_RESULT)" \
+    "RAM|ram|$(test_result RAM_RESULT)" \
+    "Battery|battery|$(test_result BATTERY_RESULT)" \
+    "Keyboard|keyboard|$(test_result KEYBOARD_RESULT)" \
+    "Peripherals|grid" "Wi-Fi|wifi" "System|info" "Machine details|pencil" \
     "DMI capture|chip" "Results|list" "Save report|save" "Command prompt|terminal" \
     "Settings|gear" "Show all tests|expand" || return 1
   case "${acts[$((TUI_CHOICE-1))]}" in
@@ -279,11 +300,20 @@ compact_menu() {
 }
 
 expanded_menu() {
-  local acts=(fullrun disk cpu ram battery keyboard touchpad touchscreen sound usb camera network wificonnect wireless system board dmi firmware results save shell settings)
+  local acts=(fullrun disk cpu ram battery keyboard screen touchpad touchscreen sound usb camera network wificonnect wireless system board dmi firmware results save shell settings)
   tui_grid "Every test" "arrows or its number, Enter to select      Q = back to the short list" \
-    "Full run|play" "HDD / SSD|disk" "CPU|cpu" "RAM|ram" "Battery|battery" \
-    "Keyboard|keyboard" "Touchpad|touchpad" "Touchscreen|touchscreen" "Sound|sound" \
-    "USB ports|usb" "Camera|camera" "Ethernet Network|network" "Wi-Fi|wifi" "Wireless test|wifi" "System|info" \
+    "Full run|play" \
+    "HDD / SSD|disk|$(test_result DISK_RESULT DISK_SELFTEST DISK_SMART)" \
+    "CPU|cpu|$(test_result CPU_RESULT)" "RAM|ram|$(test_result RAM_RESULT)" \
+    "Battery|battery|$(test_result BATTERY_RESULT)" \
+    "Keyboard|keyboard|$(test_result KEYBOARD_RESULT)" \
+    "Screen|screen|$(test_result SCREEN_RESULT)" \
+    "Touchpad|touchpad|$(test_result TOUCHPAD_RESULT)" \
+    "Touchscreen|touchscreen|$(test_result TOUCHSCREEN_RESULT)" \
+    "Sound|sound|$(test_result SOUND_RESULT)" \
+    "USB ports|usb|$(test_result USB_RESULT)" "Camera|camera|$(test_result CAMERA_RESULT)" \
+    "Ethernet Network|network|$(test_result ETHERNET_RESULT)" "Wi-Fi|wifi" \
+    "Wireless test|wifi|$(test_result WIFI_RESULT)" "System|info" \
     "Machine details|pencil" "DMI capture|chip" "Get firmware|download" \
     "Results|list" "Save report|save" "Command prompt|terminal" "Settings|gear" \
     || { set_layout compact; return 0; }

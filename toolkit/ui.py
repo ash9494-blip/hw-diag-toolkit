@@ -11,7 +11,7 @@ The bash test scripts are unchanged: tui.sh forwards their existing tui_* calls
 into this process over a FIFO. If the framebuffer cannot be opened, tui.sh
 falls back to its original ANSI implementation and nothing is lost.
 """
-import os, sys, mmap, fcntl, struct, select, time, signal
+import os, sys, mmap, fcntl, struct, select, time, signal, glob, re
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -69,18 +69,41 @@ THEME_NAME = "light"
 # proportions instead of text overflowing boxes that stayed put.
 TEXT_SCALE = 1.0
 
+# How the home grid and the menus are drawn. "manual" (1.13): the service-
+# manual sheet - drawing frame, title block, numbered callouts, a parts list
+# carrying each test's result. "classic": the white tiles and cards of 1.0-1.12.
+# Test screens keep the card look either way; this is navigation only.
+LOOK = "manual"
+
+
+def _diag_rev():
+    """The toolkit version for the title block, read from lib.sh - the one
+    place it is set - so it can never disagree with the report."""
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib.sh")) as f:
+            for line in f:
+                if line.startswith('DIAG_VERSION="'):
+                    return line.split('"')[1]
+    except OSError:
+        pass
+    return "-"
+
+DIAG_REV = _diag_rev()
+
 SETTINGS_FILE = os.path.join(os.environ.get("DIAG_RUN", "/run/diag"), "settings.conf")
 
 def load_settings():
     """Applied before the first frame, so the operator's choice survives a
     restart of the renderer as well as a change made while it is running."""
-    global TEXT_SCALE
+    global TEXT_SCALE, LOOK
     try:
         with open(SETTINGS_FILE) as f:
             for line in f:
                 k, _, v = line.strip().partition("=")
                 if k == "theme":
                     apply_theme(v)
+                elif k == "look" and v in ("manual", "classic"):
+                    LOOK = v
                 elif k == "textscale":
                     try: TEXT_SCALE = max(0.75, min(2.5, float(v)))
                     except ValueError: pass
@@ -157,6 +180,9 @@ class Framebuffer:
         self.rawmode = "BGRX" if self.bpp == 32 else "BGR;16"
         self.rowbytes = self.w * self.bpp // 8
 
+    last = None                    # the frame on screen, without the pointer
+    cursor = None                  # Cursor, once main() has made one
+
     def blit(self, img):
         data = img.tobytes("raw", self.rawmode)
         if self.stride == self.rowbytes:
@@ -166,12 +192,192 @@ class Framebuffer:
             for y in range(self.h):
                 self.map.seek(y * self.stride)
                 self.map.write(data[y * self.rowbytes:(y + 1) * self.rowbytes])
+        self.last = img
+        if self.cursor is not None:
+            self.cursor.drawn = None
+            self.cursor.paint()
+
+    def blit_region(self, patch, x, y):
+        """Write a small image at (x, y). The mouse pointer moves many times a
+        second; a full-frame write for each movement made it crawl."""
+        w, h = patch.size
+        bpp = self.rowbytes // self.w
+        data = patch.tobytes("raw", self.rawmode)
+        rb = w * bpp
+        for r in range(h):
+            self.map.seek((y + r) * self.stride + x * bpp)
+            self.map.write(data[r * rb:(r + 1) * rb])
 
     def close(self):
         try: self.map.close()
         except Exception: pass
         try: os.close(self.fd)
         except Exception: pass
+
+
+# ---------------------------------------------------------------- mouse pointer
+def _cursor_sprite(h):
+    """The classic arrow: white with a dark outline, so it shows on any
+    background. Drawn four times oversize and scaled down for smooth edges."""
+    S = 4
+    n = h * S
+    pts = [(0.0, 0.0), (0.0, 0.80), (0.22, 0.63), (0.36, 0.96), (0.48, 0.91),
+           (0.34, 0.59), (0.60, 0.59)]
+    pad = 2 * S
+    img = Image.new("RGBA", (int(0.64 * n) + 2 * pad, n + 2 * pad), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.polygon([(pad + x * n, pad + y * n) for x, y in pts],
+              fill=(255, 255, 255, 255), outline=(20, 20, 20, 255), width=max(2, S * 2))
+    return img.resize((img.width // S, img.height // S), Image.LANCZOS)
+
+
+class Cursor:
+    """The mouse pointer, painted over the frame on screen in a small region.
+
+    Hidden until a pointing device first moves, and switched off entirely
+    during the full-screen tests: on the black page of the screen test a white
+    arrow is indistinguishable from a stuck pixel."""
+    def __init__(self, fb, s):
+        self.fb = fb
+        self.sprite = _cursor_sprite(max(16, int(26 * s)))
+        self.x, self.y = fb.w // 2, fb.h // 2
+        self.visible = False
+        self.enabled = True
+        self.drawn = None
+
+    def _box(self):
+        w, h = self.sprite.size
+        return (self.x, self.y, min(self.fb.w, self.x + w), min(self.fb.h, self.y + h))
+
+    def paint(self):
+        if not (self.visible and self.enabled) or self.fb.last is None:
+            return
+        box = self._box()
+        if box[2] <= box[0] or box[3] <= box[1]:
+            return
+        patch = self.fb.last.crop(box).convert("RGB")
+        patch.paste(self.sprite, (0, 0), self.sprite)
+        self.fb.blit_region(patch, box[0], box[1])
+        self.drawn = box
+
+    def erase(self):
+        if self.drawn and self.fb.last is not None:
+            b = self.drawn
+            self.fb.blit_region(self.fb.last.crop(b).convert("RGB"), b[0], b[1])
+        self.drawn = None
+
+    def move_to(self, x, y):
+        x = max(0, min(self.fb.w - 1, int(x)))
+        y = max(0, min(self.fb.h - 1, int(y)))
+        if self.visible and (x, y) == (self.x, self.y):
+            return
+        self.erase()
+        self.x, self.y = x, y
+        self.visible = True
+        self.paint()
+
+    def set_enabled(self, on):
+        if not on:
+            self.erase()
+        self.enabled = on
+        if on:
+            self.paint()
+
+
+def _in(box, xy):
+    return bool(box) and box[0] <= xy[0] < box[2] and box[1] <= xy[1] < box[3]
+
+
+# ---------------------------------------------------------------- wifi status
+def wifi_status():
+    """(state, bars, ssid) for the header icon, from sysfs and procfs only -
+    this runs every few seconds and must not start processes.
+
+    state: none (no adapter), off (radio blocked), down (not connected),
+           noip (joined, no address) or up.
+    """
+    try:
+        names = sorted(os.listdir("/sys/class/net"))
+    except OSError:
+        return ("none", 0, "")
+    ifs = [n for n in names if os.path.isdir("/sys/class/net/%s/wireless" % n)
+           or os.path.exists("/sys/class/net/%s/phy80211" % n)]
+    if not ifs:
+        return ("none", 0, "")
+    blocked, radios = 0, 0
+    for r in glob.glob("/sys/class/rfkill/rfkill*"):
+        try:
+            if open(r + "/type").read().strip() != "wlan":
+                continue
+            radios += 1
+            if open(r + "/soft").read().strip() == "1" or open(r + "/hard").read().strip() == "1":
+                blocked += 1
+        except OSError:
+            continue
+    try:
+        routes = open("/proc/net/route").read().split("\n")[1:]
+    except OSError:
+        routes = []
+    try:
+        wl = open("/proc/net/wireless").read().split("\n")[2:]
+    except OSError:
+        wl = []
+    ssid_file = ""
+    try:
+        ssid_file = open("/run/diag/wifi.state").read().strip()
+    except OSError:
+        pass
+    for i in ifs:
+        try:
+            oper = open("/sys/class/net/%s/operstate" % i).read().strip()
+        except OSError:
+            continue
+        if oper != "up":
+            continue
+        level = None
+        for line in wl:
+            f = line.split()
+            if f and f[0].rstrip(":") == i and len(f) > 3:
+                try: level = int(float(f[3].rstrip(".")))
+                except ValueError: pass
+        bars = 1
+        if level is not None:
+            bars = 3 if level >= -60 else (2 if level >= -72 else 1)
+        has_ip = any(r.split("\t")[0] == i for r in routes if r.strip())
+        ssid = ""
+        if ssid_file.startswith(i + "\t"):
+            ssid = ssid_file.split("\t", 1)[1]
+        return ("up" if has_ip else "noip", bars, ssid)
+    if radios and blocked == radios:
+        return ("off", 0, "")
+    return ("down", 0, "")
+
+
+def _draw_wifi_status(d, cx, cy, size, st):
+    """Three arcs and a dot. Connected: lit arcs for signal strength. Joined but
+    no address: amber. Not connected: grey. Off or no adapter: grey, struck
+    through."""
+    state, bars, _ = st
+    u = size / 24.0
+    by = cy + 7 * u                           # centre of the arcs, at the dot
+    w = max(2, int(2.4 * u))
+    if state == "up":
+        # Unlit arcs halfway between grey and the background: LINE vanished
+        # against the header and one bar read as a bare dot.
+        dim = tuple((a + b) // 2 for a, b in zip(MUTED, GROUND))
+        cols = [INK if k < bars else dim for k in range(3)]
+        dotc = INK
+    elif state == "noip":
+        cols = [WARN_] * 3; dotc = WARN_
+    else:
+        cols = [MUTED] * 3; dotc = MUTED
+    for k, rad in enumerate((6.0, 10.5, 15.0)):
+        r = rad * u
+        d.arc([cx - r, by - r, cx + r, by + r], 225, 315, fill=cols[k], width=w)
+    rd = 2.0 * u
+    d.ellipse([cx - rd, by - rd, cx + rd, by + rd], fill=dotc)
+    if state in ("off", "none"):
+        d.line([(cx - 11 * u, cy - 9 * u), (cx + 11 * u, cy + 9 * u)], fill=MUTED, width=w)
 
 
 # ---------------------------------------------------------------- tile icons
@@ -395,6 +601,17 @@ def _icon(name, d, cx, cy, size, col):
         dot(12, 10.2, 1.6)
         circ(12, 10.2, 3.8)
 
+    elif name == "screen":                                # dead-pixel test
+        # a monitor whose panel is a grid of pixels, one of them dark
+        box(2.5, 4, 21.5, 16.5, 2.2)
+        ln(12, 16.5, 12, 20); ln(8, 20, 16, 20)
+        for gx in (7.5, 12, 16.5):
+            for gy in (7.8, 12.6):
+                if (gx, gy) == (16.5, 7.8):
+                    circ(gx, gy, 1.3)
+                else:
+                    dot(gx, gy, 1.3)
+
     elif name == "touchpad":
         box(3.5, 5, 20.5, 19, 2.6)
         ln(3.5, 14.6, 20.5, 14.6)
@@ -539,9 +756,23 @@ SHIFTED = {2: "!", 3: "@", 4: "#", 5: "$", 6: "%", 7: "^", 8: "&", 9: "*", 10: "
 class Keyboard:
     """Reads keyboards straight from evdev and grabs them, so nothing leaks to
     the console and there is no 10-second limit imposed by an external tool."""
+    # Mouse, touchpad and touchscreen turn into these names, alongside keys.
+    # click: at click_xy. back: right button or two-finger tap - same as Esc.
+    # hover: the pointer moved (rate-limited). wheelup / wheeldown: scrolling.
+    POINTER_EVENTS = ("click", "back", "hover", "wheelup", "wheeldown")
+
     def __init__(self, grab=True):
         self.script = os.environ.get("DIAG_UI_KEYS")
         self.fds, self.paths = [], []
+        self.cursor = None        # set by main(); no pointer support until then
+        self.tick = None          # called about once a second while waiting
+        self.s = 1.0
+        self.ptr = {}             # fd -> pointing-device state
+        self.shared = {}          # keyboard fd -> pointer state, same device
+        self.ptr_scan = 0.0
+        self.click_xy = (0, 0)
+        self._last_hover = 0.0
+        self._last_tick = 0.0
         if self.script:
             self.sfd = os.open(self.script, os.O_RDONLY | os.O_NONBLOCK)
             self.sbuf = b""
@@ -594,21 +825,48 @@ class Keyboard:
                     if name:
                         return name, 0
             return None, None
-        if not self.fds:
-            time.sleep(min(timeout, 0.5))
-            return None, None
         end = time.time() + timeout
         while True:
-            left = end - time.time()
+            now = time.time()
+            left = end - now
             if left <= 0:
                 return None, None
-            r, _, _ = select.select(self.fds, [], [], left)
+            if self.cursor is not None and now - self.ptr_scan > 3.0:
+                self._scan_pointers()             # a USB mouse plugged in later
+            fds = self.fds + list(self.ptr)
+            if not fds:
+                time.sleep(min(left, 0.5))
+                self._do_tick()
+                if not self.fds and self.cursor is None:
+                    return None, None
+                continue
+            # Wake at least once a second so the clock and Wi-Fi icon in the
+            # header keep up while a menu sits waiting.
+            r, _, _ = select.select(fds, [], [], min(left, 1.0))
+            if time.time() - self._last_tick >= 1.0:
+                self._do_tick()
             for fd in r:
+                if fd in self.ptr:
+                    ev = self._read_pointer(fd)
+                    if ev == "hover":
+                        if time.time() - self._last_hover < 0.04:
+                            continue
+                        self._last_hover = time.time()
+                    if ev:
+                        return ev, 0
+                    continue
                 try: data = os.read(fd, EVENT_SIZE * 64)
                 except OSError: continue
+                pev = None
                 for i in range(0, len(data) - EVENT_SIZE + 1, EVENT_SIZE):
                     _, _, etype, code, value = struct.unpack(
                         EVENT_FMT, data[i:i + EVENT_SIZE])
+                    st = self.shared.get(fd)
+                    if st is not None and (etype != EV_KEY or code >= BTN_LEFT):
+                        ev = self._ptr_event(st, etype, code, value)
+                        if ev and (pev is None or pev == "hover"):
+                            pev = ev
+                        continue
                     if etype != EV_KEY:
                         continue
                     if code in (42, 54):
@@ -624,18 +882,188 @@ class Keyboard:
                     if self.shift and code in SHIFTED:
                         name = SHIFTED[code]
                     return name, code
+                if pev == "hover" and time.time() - self._last_hover < 0.04:
+                    pev = None
+                if pev:
+                    if pev == "hover":
+                        self._last_hover = time.time()
+                    return pev, 0
 
     def drain(self):
         if self.script:
             return
-        for fd in self.fds:
+        for fd in self.fds + list(self.ptr):
             try:
                 while os.read(fd, EVENT_SIZE * 64):
                     pass
             except OSError:
                 pass
+        for st in list(self.ptr.values()) + list(self.shared.values()):
+            st.update(touch=False, last=None, btn=[], dx=0, dy=0, wheel=0)
+
+    # ---- pointing devices ------------------------------------------
+    # Read alongside the keyboards but never grabbed: the touchpad and mouse
+    # tests grab their device while they run, and a grab is exclusive, so the
+    # pointer simply goes quiet during those tests instead of fighting them.
+    def _do_tick(self):
+        self._last_tick = time.time()
+        if self.tick:
+            try: self.tick()
+            except Exception: pass
+
+    def _scan_pointers(self):
+        self.ptr_scan = time.time()
+        have = {st["path"] for st in self.ptr.values()}
+        have |= {st["path"] for st in self.shared.values()}
+        for path, name, kind in Pointer._devices():
+            if path in have:
+                continue
+            # A keyboard-and-mouse receiver can be one event node. The keyboard
+            # side already holds it grabbed, which is exclusive, so its pointer
+            # events are routed from the keyboard read instead.
+            shared = path in self.paths
+            if shared:
+                fd = self.fds[self.paths.index(path)]
+            else:
+                try:
+                    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+                except OSError:
+                    continue
+            # Ranges for every kind: a "mouse" can be absolute too (USB
+            # tablets, KVM switches, VMware/QEMU's vmmouse) - it reports where
+            # the pointer IS, not how far it moved.
+            rng = Pointer._absrange(fd)
+            xr = rng.get(ABS_X) or rng.get(ABS_MT_POSITION_X) or (0, 1000)
+            yr = rng.get(ABS_Y) or rng.get(ABS_MT_POSITION_Y) or (0, 1000)
+            # A touchpad crossed edge to edge moves the pointer about 1.2
+            # screen widths - close to what libinput feels like.
+            k = 1.2 * self.cursor.fb.w / max(1, xr[1] - xr[0])
+            (self.shared if shared else self.ptr)[fd] = {
+                            "path": path, "kind": kind, "rng": rng, "xr": xr, "yr": yr,
+                            "k": k, "x": None, "y": None, "last": None, "touch": False,
+                            "t0": 0.0, "moved": 0.0, "fingers": 1, "clicked": False,
+                            "scroll": 0.0, "dx": 0, "dy": 0, "wheel": 0, "btn": []}
+
+    def _read_pointer(self, fd):
+        st = self.ptr[fd]
+        try:
+            data = os.read(fd, EVENT_SIZE * 64)
+        except BlockingIOError:
+            return None
+        except OSError:                       # ENODEV: the device was unplugged
+            try: os.close(fd)
+            except OSError: pass
+            del self.ptr[fd]
+            return None
+        if not data:
+            return None
+        out = None
+        for i in range(0, len(data) - EVENT_SIZE + 1, EVENT_SIZE):
+            _, _, etype, code, value = struct.unpack(EVENT_FMT, data[i:i + EVENT_SIZE])
+            ev = self._ptr_event(st, etype, code, value)
+            if ev and (out is None or out == "hover"):
+                out = ev
+        return out
+
+    def _ptr_event(self, st, etype, code, value):
+        """One evdev event into the device state; a pointer event at each
+        SYN_REPORT, when the frame is complete."""
+        rng = st["rng"]
+        if etype == EV_REL:
+            if code == REL_X: st["dx"] += value
+            elif code == REL_Y: st["dy"] += value
+            elif code == REL_WHEEL: st["wheel"] += value
+        elif etype == EV_ABS:
+            # Single-touch axes when the device has them, else slot data.
+            if code == ABS_X or (code == ABS_MT_POSITION_X and ABS_X not in rng):
+                st["x"] = value; st["absmoved"] = True
+            elif code == ABS_Y or (code == ABS_MT_POSITION_Y and ABS_Y not in rng):
+                st["y"] = value; st["absmoved"] = True
+        elif etype == EV_KEY:
+            st["btn"].append((code, value))
+        elif etype == EV_SYN:
+            return self._pointer_frame(st)
+        return None
+
+    def _pointer_frame(self, st):
+        c = self.cursor
+        now = time.time()
+        kind = st["kind"]
+        ev = None
+        btns, st["btn"] = st["btn"], []
+        for code, value in btns:
+            if code in (BTN_TOOL_DOUBLETAP, BTN_TOOL_TRIPLETAP, BTN_TOOL_QUADTAP) and value:
+                st["fingers"] = max(st["fingers"], 2)
+            if code == BTN_TOUCH:
+                if value:
+                    st.update(touch=True, t0=now, moved=0.0, last=None, fingers=1,
+                              clicked=False, scroll=0.0)
+                else:
+                    # A tap: short, barely moving, no physical click during it.
+                    tap = (st["touch"] and now - st["t0"] < 0.25
+                           and st["moved"] < 14 * self.s and not st["clicked"])
+                    st["touch"] = False
+                    st["last"] = None
+                    if kind == "touchscreen":
+                        ev = "click"
+                    elif tap:
+                        ev = "back" if st["fingers"] >= 2 else "click"
+            elif code == BTN_LEFT and value == 1:
+                # Clickpads report a two-finger press as a left button.
+                ev = "back" if (kind == "touchpad" and st["fingers"] >= 2) else "click"
+                st["clicked"] = True
+            elif code == BTN_RIGHT and value == 1:
+                ev = "back"
+        moved = False
+        if kind == "mouse" and st.get("absmoved") and st["x"] is not None \
+                and st["y"] is not None:
+            # An absolute mouse: map its position straight onto the screen.
+            (x0, x1), (y0, y1) = st["xr"], st["yr"]
+            c.move_to((st["x"] - x0) * c.fb.w / max(1, x1 - x0),
+                      (st["y"] - y0) * c.fb.h / max(1, y1 - y0))
+            st["absmoved"] = False
+            moved = True
+        elif kind == "mouse":
+            dx, dy = st["dx"], st["dy"]
+            if dx or dy:
+                # A little acceleration, so a small mouse still crosses a wide
+                # panel without being lifted.
+                acc = 1.0 + min(2.0, (abs(dx) + abs(dy)) / 12.0)
+                c.move_to(c.x + dx * acc, c.y + dy * acc)
+                moved = True
+        elif kind == "touchscreen":
+            if st["touch"] and st["x"] is not None and st["y"] is not None:
+                (x0, x1), (y0, y1) = st["xr"], st["yr"]
+                c.move_to((st["x"] - x0) * c.fb.w / max(1, x1 - x0),
+                          (st["y"] - y0) * c.fb.h / max(1, y1 - y0))
+                moved = True
+        elif st["touch"] and st["x"] is not None and st["y"] is not None:
+            if st["last"] is not None:
+                dx = (st["x"] - st["last"][0]) * st["k"]
+                dy = (st["y"] - st["last"][1]) * st["k"]
+                st["moved"] += abs(dx) + abs(dy)
+                if st["fingers"] >= 2:             # two fingers: scroll
+                    st["scroll"] += dy
+                    if abs(st["scroll"]) > 45 * self.s:
+                        ev = ev or ("wheelup" if st["scroll"] < 0 else "wheeldown")
+                        st["scroll"] = 0.0
+                else:
+                    c.move_to(c.x + dx, c.y + dy)
+                    moved = True
+            st["last"] = (st["x"], st["y"])
+        if st["wheel"]:
+            ev = ev or ("wheelup" if st["wheel"] > 0 else "wheeldown")
+        st["dx"] = st["dy"] = st["wheel"] = 0
+        if ev:
+            self.click_xy = (c.x, c.y)
+            return ev
+        return "hover" if moved else None
 
     def close(self):
+        for fd in list(self.ptr):
+            try: os.close(fd)
+            except Exception: pass
+        self.ptr = {}
         if self.script:
             try: os.close(self.sfd)
             except Exception: pass
@@ -712,6 +1140,11 @@ class Screen:
         self.f_big   = font(MONO_B, int(42 * s))
         self.readh   = int(52 * s)
         self.rowh    = int(34 * s)
+        # the service-manual sheet: notes and cell labels, part names, titles
+        self.f_note  = font(MONO_R, int(15 * s))
+        self.f_noteb = font(MONO_B, int(16 * s))
+        self.f_part  = font(UI_B,   int(21 * s))
+        self.f_ttl   = font(UI_B,   int(24 * s))
 
     def __init__(self, fb):
         self.fb = fb
@@ -729,6 +1162,18 @@ class Screen:
 
         self.title = ""; self.hint = ""; self.sub = ""
         self.items = []          # display list
+
+        # Header status - clock and Wi-Fi - and what is on screen, so the
+        # status can be redrawn while a menu waits.
+        self.status = {"clock": "", "date": "", "wifi": ("none", 0, "")}
+        self._status_t = 0.0
+        self._wifi_t = 0.0
+        self.status_box = None   # where the Wi-Fi icon is, for clicks
+        self.mode = "card"       # card | grid | full (a test owns the screen)
+        self._grid_args = None
+        self.menu_rows = []      # (index, box) of the menu rows drawn
+        self._menu_first = 0     # first row of a scrolled menu's window
+        self.choice_boxes = []   # (value, box) of the YES / NO pills
 
     # ---- primitives -------------------------------------------------
     def _card_box(self):
@@ -750,20 +1195,71 @@ class Screen:
         return top + int((float(row) - 6) * self.rowh)
 
     # ---- frame ------------------------------------------------------
-    def render(self):
-        img = Image.new("RGB", (self.W, self.H), GROUND)
-        d = ImageDraw.Draw(img)
+    # ---- header status ----------------------------------------------
+    def refresh_status(self):
+        """Clock every second, Wi-Fi every three. True when anything changed."""
+        now = time.time()
+        if now - self._status_t < 1.0:
+            return False
+        self._status_t = now
+        lt = time.localtime()
+        wifi = self.status["wifi"]
+        if now - self._wifi_t >= 3.0:
+            self._wifi_t = now
+            try:
+                wifi = wifi_status()
+            except Exception:
+                wifi = ("none", 0, "")
+        new = {"clock": time.strftime("%H:%M", lt),
+               "date": time.strftime("%a %d %b", lt), "wifi": wifi}
+        changed = new != self.status
+        self.status = new
+        return changed
 
-        # header
+    def tick(self):
+        """Called about once a second while waiting: redraw when the minute
+        turns or the Wi-Fi state changes - never over a test's own screen."""
+        if self.mode not in ("card", "grid"):
+            return
+        if not self.refresh_status():
+            return
+        if self.mode == "grid" and self._grid_args:
+            self.render_grid(*self._grid_args)
+        elif self.mode == "card":
+            self.render()
+
+    def _draw_header(self, img, d):
+        s = self.s
         cy = self.hdr // 2
-        r = int(7 * self.s)
+        r = int(7 * s)
         _draw_brand(img, self.M, cy, int(2.3 * r))
         d.text((self.M + 3 * r, cy), "Hardware Diagnostic Toolkit",
                font=self.f_brand, fill=INK, anchor="lm")
+        self.refresh_status()
+        # Right to left: clock over date, the Wi-Fi icon, the machine name.
+        x = self.W - self.M
+        clock, date = self.status["clock"], self.status["date"]
+        d.text((x, cy - int(9 * s)), clock, font=self.f_bodyb, fill=INK, anchor="rm")
+        d.text((x, cy + int(13 * s)), date, font=self.f_tiny, fill=MUTED, anchor="rm")
+        x -= max(d.textlength(clock, font=self.f_bodyb),
+                 d.textlength(date, font=self.f_tiny)) + int(22 * s)
+        isz = int(30 * s)
+        _draw_wifi_status(d, x - isz // 2, cy, isz, self.status["wifi"])
+        pad = int(10 * s)
+        self.status_box = [x - isz - pad, cy - isz // 2 - pad, x + pad, cy + isz // 2 + pad]
+        x -= isz + int(26 * s)
         if self.sub:
             for i, part in enumerate(self.sub.split("\n")[:2]):
-                d.text((self.W - self.M, cy - int(9 * self.s) + i * int(19 * self.s)),
+                d.text((x, cy - int(9 * s) + i * int(19 * s)),
                        part, font=self.f_small, fill=MUTED, anchor="rm")
+
+    def render(self):
+        self.mode = "card"
+        if LOOK == "manual" and any(it[0] == "menu" for it in self.items):
+            return self._render_sheet_menu()
+        img = Image.new("RGB", (self.W, self.H), GROUND)
+        d = ImageDraw.Draw(img)
+        self._draw_header(img, d)
 
         x0, y0, x1, y1 = self._card(d)
         tx = x0 + self.pad
@@ -842,12 +1338,15 @@ class Screen:
             _, row, yes = it
             y = self.row_y(row)
             h = int(46 * self.s)
+            self.choice_boxes = []
             for i, (label, active, on, off) in enumerate(
                     (("YES", yes, (PASS_, PAPER), (GROUND, MUTED)),
                      ("NO", not yes, (FAIL_, PAPER), (GROUND, MUTED)))):
                 w = int(150 * self.s)
                 x = left + i * (w + int(20 * self.s))
                 bg, fg = on if active else off
+                self.choice_boxes.append((i == 0, [x, y - int(8 * self.s), x + w,
+                                                   y - int(8 * self.s) + h]))
                 d.rounded_rectangle([x, y - int(8 * self.s), x + w, y - int(8 * self.s) + h],
                                     h // 2, fill=bg,
                                     outline=bg if active else LINE, width=2)
@@ -867,7 +1366,9 @@ class Screen:
                 w = span * widths[i]
                 f = self.f_bodyb if i == 0 else self.f_monob
                 if i == 0:
-                    d.text((x, y), c, font=f, fill=INK, anchor="la")
+                    # a long network name must not run into the next column
+                    d.text((x, y), self._clip(d, c, f, int(w) - int(12 * self.s)),
+                           font=f, fill=INK, anchor="la")
                 else:
                     d.text((x + w, y), c, font=f,
                            fill=INK if i in (1, 3) else MUTED, anchor="ra")
@@ -885,42 +1386,404 @@ class Screen:
                 x += w
             d.line([left, y + int(26 * self.s), right, y + int(26 * self.s)], fill=LINE, width=1)
         elif kind == "menu":
-            _, sel, entries = it
-            y = self.row_y(6) + int(6 * self.s)
-            # A long menu tightens its rows rather than running off the card.
-            room = (self.H - self.ftr - self.pad) - y
-            rh = int(46 * self.s)
-            if entries and len(entries) * rh > room:
-                rh = max(int(30 * self.s), room // len(entries))
-            # Still too many (a busy office can put 40 networks in a wifi
-            # list): show a window that follows the selection instead of
-            # drawing rows off the bottom of the screen where they cannot be
-            # seen or reached.
-            allrows = list(enumerate(entries))
-            fit = max(1, room // rh)
-            if len(allrows) > fit:
-                start = min(max(0, sel - fit // 2), len(allrows) - fit)
-                allrows = allrows[start:start + fit]
-            # One description column for the whole menu, pushed out far enough
-            # that the longest name cannot run into it.
-            namex = left + int(38 * self.s)
-            descx = max(left + int(230 * self.s),
-                        namex + int(20 * self.s) + max(
-                            [d.textlength(n, font=self.f_bodyb) for n, _ in entries] or [0]))
-            for slot, (i, (name, desc)) in enumerate(allrows):
-                top = y + slot * rh
-                if i == sel:
-                    d.rounded_rectangle([left - int(14 * self.s), top - int(8 * self.s),
-                                         right + int(14 * self.s), top + rh - int(14 * self.s)],
-                                        max(4, self.radius // 2), fill=ACCENT)
-                    nc, dc, ic = PAPER, (219, 231, 255), (219, 231, 255)
-                else:
-                    nc, dc, ic = INK, MUTED, MUTED
-                d.text((left, top), str(i + 1), font=self.f_mono, fill=ic, anchor="la")
-                d.text((namex, top), name, font=self.f_bodyb, fill=nc, anchor="la")
-                if desc:
-                    d.text((descx, top), self._clip(d, desc, self.f_body, right - descx),
-                           font=self.f_body, fill=dc, anchor="la")
+            self._draw_menu(d, it[1], it[2], left, right)
+
+    def _draw_menu(self, d, sel, entries, left, right):
+        """A list of choices. Each entry is (name, desc), and desc may carry
+        several "|"-separated cells, which are drawn as aligned columns.
+
+        The Wi-Fi list on a real TECRA A40-J was what forced this rewrite:
+        with 18 networks the rows tightened to 30 px while the highlight kept
+        fixed offsets, so the bar sliced through the selected row's text;
+        and the columns were space-padded strings in a proportional font, so
+        signal, band and security wandered from row to row.
+        """
+        s = self.s
+        y = self.row_y(6) + int(6 * s)
+        room = (self.H - self.ftr - self.pad) - y
+        # The row can never be shorter than the text plus breathing room, so
+        # the highlight always wraps it. A long list scrolls instead of
+        # squashing further.
+        asc, desc_px = self.f_bodyb.getmetrics()
+        minrh = asc + desc_px + int(14 * s)
+        rh = int(46 * s)
+        if entries and len(entries) * rh > room:
+            rh = max(minrh, room // len(entries))
+        fit = max(1, room // rh)
+        allrows = list(enumerate(entries))
+        first = 0
+        self.menu_rows = []
+        if len(allrows) > fit:
+            # The window only moves when the selection leaves it. Recentring on
+            # every move made the list slide under a mouse pointer, which then
+            # hovered a different row, which slid the list again.
+            first = self._menu_first
+            if sel < first:
+                first = sel
+            elif sel >= first + fit:
+                first = sel - fit + 1
+            first = min(max(0, first), len(allrows) - fit)
+            self._menu_first = first
+            allrows = allrows[first:first + fit]
+            # Where the window is in the whole list - the only sign that
+            # there is more above or below.
+            d.text((right, self.hdr + self.pad + int(6 * s)),
+                   "%d-%d of %d" % (first + 1, first + len(allrows), len(entries)),
+                   font=self.f_small, fill=MUTED, anchor="ra")
+
+        cells = [[c.strip() for c in desc.split("|")] if desc else []
+                 for _, desc in entries]
+        ncols = max([len(c) for c in cells] or [0])
+        gap = int(32 * s)
+        numw = d.textlength(str(len(entries)), font=self.f_mono)
+        namex = left + max(int(38 * s), int(numw) + int(14 * s))
+        namew_all = max([d.textlength(n, font=self.f_bodyb) for n, _ in entries] or [0])
+
+        if ncols <= 1:
+            # One description column, pushed out far enough that the longest
+            # name cannot run into it.
+            colx = [max(left + int(230 * s), namex + int(20 * s) + namew_all)]
+            colw = [right - colx[0]]
+            namew = colx[0] - namex - int(20 * s)
+        else:
+            # Every column as wide as its widest cell; the name column gets
+            # what is left and long names are shortened with "...".
+            colw = [0] * ncols
+            for c in cells:
+                for k, v in enumerate(c):
+                    colw[k] = max(colw[k], d.textlength(v, font=self.f_body))
+            need = sum(colw) + gap * ncols
+            namew = min(namew_all, right - namex - need)
+            namew = max(namew, int(160 * s))
+            colx, x = [], namex + namew + gap
+            for w in colw:
+                colx.append(x)
+                x += w + gap
+
+        vgap = max(2, int(4 * s))
+        for slot, (i, (name, _)) in enumerate(allrows):
+            top = y + slot * rh
+            cy = top + (rh - vgap) // 2
+            self.menu_rows.append((i, [left - int(14 * s), top,
+                                       right + int(14 * s), top + rh - vgap]))
+            if i == sel:
+                d.rounded_rectangle([left - int(14 * s), top,
+                                     right + int(14 * s), top + rh - vgap],
+                                    max(4, self.radius // 2), fill=ACCENT)
+                nc, dc, ic = PAPER, (219, 231, 255), (219, 231, 255)
+            else:
+                nc, dc, ic = INK, MUTED, MUTED
+            d.text((left, cy), str(i + 1), font=self.f_mono, fill=ic, anchor="lm")
+            d.text((namex, cy), self._clip(d, name, self.f_bodyb, namew),
+                   font=self.f_bodyb, fill=nc, anchor="lm")
+            for k, v in enumerate(cells[i]):
+                if k >= len(colx) or not v:
+                    continue
+                w = right - colx[k] if k == len(colx) - 1 else colw[k]
+                d.text((colx[k], cy), self._clip(d, v, self.f_body, w),
+                       font=self.f_body, fill=dc, anchor="lm")
+
+    # ---- the service-manual sheet (LOOK == "manual") -----------------
+    # Home and menus drawn as a page of the service manual a technician opens
+    # before a board swap: a drawing frame with zone markers, a title block,
+    # each test a line-art part with a numbered balloon callout, and a parts
+    # list that carries every test's result for this session. The theme's
+    # accent is the revision colour and marks only the current selection.
+    # Everything is flat line work - no shadows, no gradients - so it costs no
+    # more to draw than the tiles it replaced.
+    def _sheet_colours(self):
+        mix = lambda a, b, t: tuple(int(x + (y - x) * t) for x, y in zip(a, b))
+        return {"sheet": mix(PAPER, GROUND, 0.25), "ink": INK, "ink2": MUTED,
+                "hair": LINE, "sel": ACCENT, "selbg": mix(PAPER, ACCENT, 0.13)}
+
+    def _sheet_frame(self, d, c):
+        """Outer and inner border, zone markers 1-8 across and A-D down."""
+        s, W, H = self.s, self.W, self.H
+        d.rectangle([0, 0, W, H], fill=c["sheet"])
+        m = int(14 * s)
+        inner = int(34 * s)
+        d.rectangle([m, m, W - m, H - m], outline=c["ink"], width=max(2, int(2 * s)))
+        d.rectangle([inner, inner, W - inner, H - inner], outline=c["ink"], width=1)
+        for k in range(8):
+            x = inner + (W - 2 * inner) * (k + 0.5) / 8
+            for y in ((m + inner) / 2, H - (m + inner) / 2):
+                d.text((x, y), str(k + 1), font=self.f_note, fill=c["ink2"], anchor="mm")
+            if k:
+                xx = inner + (W - 2 * inner) * k // 8
+                d.line([(xx, m), (xx, inner)], fill=c["ink2"])
+                d.line([(xx, H - inner), (xx, H - m)], fill=c["ink2"])
+        for k in range(4):
+            y = inner + (H - 2 * inner) * (k + 0.5) / 4
+            for x in ((m + inner) / 2, W - (m + inner) / 2):
+                d.text((x, y), "ABCD"[k], font=self.f_note, fill=c["ink2"], anchor="mm")
+        return inner
+
+    def _spaced(self, d, xy, text, font, fill, sp):
+        x, y = xy
+        for ch in text:
+            d.text((x, y), ch, font=font, fill=fill, anchor="lm")
+            x += d.textlength(ch, font=font) + sp
+        return x - xy[0] - sp
+
+    def _title_block(self, img, d, c, inner):
+        """The header as a title block: name, then ruled cells right to left -
+        time with the Wi-Fi icon, date, revision, and the machine itself with
+        its CPU and memory on the second line, as the old header had it."""
+        s, W = self.s, self.W
+        self.refresh_status()
+        y0, y1 = inner, inner + int(62 * s)
+        d.line([(inner, y1), (W - inner, y1)], fill=c["ink"])
+        cy = (y0 + y1) // 2
+        x = inner + int(18 * s)
+        _draw_brand(img, x, cy, int(16 * s))
+        namew = self._spaced(d, (x + int(26 * s), cy), "HARDWARE DIAGNOSTIC TOOLKIT",
+                             self.f_bodyb, c["ink"], max(1, int(2 * s)))
+        left_limit = x + int(26 * s) + namew + int(20 * s)
+
+        pad = int(14 * s)
+        xr = W - inner
+        # time + Wi-Fi, as wide as they need at the current text size
+        isz = int(26 * s)
+        cw = int(max(150 * s, d.textlength(self.status["clock"], font=self.f_noteb)
+                     + isz + 3 * pad, d.textlength("TIME", font=self.f_note) + isz + 3 * pad))
+        d.line([(xr - cw, y0), (xr - cw, y1)], fill=c["ink"])
+        d.text((xr - cw + pad, cy - int(11 * s)), "TIME", font=self.f_note, fill=c["ink2"], anchor="lm")
+        d.text((xr - pad, cy + int(9 * s)), self.status["clock"], font=self.f_noteb,
+               fill=c["ink"], anchor="rm")
+        icx = xr - cw + pad + isz // 2
+        _draw_wifi_status(d, icx, cy + int(9 * s), isz, self.status["wifi"])
+        self.status_box = [xr - cw, y0, xr - int(70 * s), y1]
+        xr -= cw
+        for label, val in (("DATE", self.status["date"].upper()), ("REV", DIAG_REV)):
+            cw = int(max(d.textlength(val, font=self.f_noteb),
+                         d.textlength(label, font=self.f_note)) + 2 * pad)
+            d.line([(xr - cw, y0), (xr - cw, y1)], fill=c["ink"])
+            d.text((xr - cw + pad, cy - int(11 * s)), label, font=self.f_note, fill=c["ink2"], anchor="lm")
+            d.text((xr - cw + pad, cy + int(10 * s)), val, font=self.f_noteb, fill=c["ink"], anchor="lm")
+            xr -= cw
+        # The machine: model over CPU and memory, in whatever width is left.
+        # Ash asked for the CPU and RAM line to stay in the header, so the
+        # memory figure is never the part that gets cut: the CPU name is
+        # tidied ("(R)", "(TM)" and the like are noise at this size) and only
+        # the CPU is shortened if the line still does not fit.
+        if self.sub:
+            parts = self.sub.split("\n")[:2]
+            if len(parts) > 1:
+                parts[1] = re.sub(r"\((R|TM|tm|r)\)|\bCPU\b|\b\d+(st|nd|rd|th) Gen\b", "", parts[1])
+                parts[1] = re.sub(r"\s+", " ", parts[1]).strip()
+            avail = xr - left_limit - 2 * pad
+            if avail > int(120 * s):
+                # +2: a width rounded down by int() made the text a fraction
+                # of a pixel "too wide" and it was shortened for nothing.
+                cw = int(min(avail, max(d.textlength(p, font=self.f_small) for p in parts))) + 2 * pad + 2
+                inner_w = cw - 2 * pad
+                d.line([(xr - cw, y0), (xr - cw, y1)], fill=c["ink"])
+                for i, p in enumerate(parts):
+                    if i == 1 and d.textlength(p, font=self.f_small) > inner_w and " - " in p:
+                        cpu, mem = p.rsplit(" - ", 1)
+                        mem = " - " + mem
+                        p = self._clip(d, cpu, self.f_small,
+                                       inner_w - d.textlength(mem, font=self.f_small)) + mem
+                    yy = cy + (i - (len(parts) - 1) / 2) * int(21 * s)
+                    d.text((xr - cw + pad, yy), self._clip(d, p, self.f_small, inner_w),
+                           font=self.f_small, fill=c["ink"] if i == 0 else c["ink2"], anchor="lm")
+        return y1
+
+    def _sheet_title(self, d, c, inner, top, right_note=""):
+        s = self.s
+        if self.title:
+            self._spaced(d, (inner + int(22 * s), top + int(34 * s)), self.title.upper(),
+                         self.f_ttl, c["ink"], max(1, int(1.5 * s)))
+
+    def _balloon(self, d, c, cx, cy, n, on):
+        r = int(17 * self.s)
+        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=c["sel"] if on else c["sheet"],
+                  outline=c["sel"] if on else c["ink"], width=max(2, int(1.6 * self.s)))
+        d.text((cx, cy), str(n), font=self.f_noteb, fill=c["sheet"] if on else c["ink"],
+               anchor="mm")
+        return r
+
+    def _wrap2(self, d, text, font, avail):
+        """One line, or two at the best word break - a name is never cut short
+        while it can wrap (the first tiles truncated "Machine details")."""
+        if d.textlength(text, font=font) <= avail or " " not in text:
+            return [text]
+        ws = text.split()
+        return min(([" ".join(ws[:k]), " ".join(ws[k:])] for k in range(1, len(ws))),
+                   key=lambda p: max(d.textlength(t, font=font) for t in p))
+
+    @staticmethod
+    def _sheet_cols(n):
+        return min(4 if n > 8 else 5, n)
+
+    def _render_sheet_grid(self, sel, entries):
+        img = Image.new("RGB", (self.W, self.H), GROUND)
+        d = ImageDraw.Draw(img)
+        c = self._sheet_colours()
+        s = self.s
+        inner = self._sheet_frame(d, c)
+        top = self._title_block(img, d, c, inner)
+        lw = int(self.W * 0.27)
+        lx0 = self.W - inner - lw
+        d.line([(lx0, top), (lx0, self.H - inner)], fill=c["ink"])
+        self._parts_list(d, c, sel, entries, lx0, top, self.W - inner, self.H - inner)
+        self._sheet_title(d, c, inner, top)
+        d.text((lx0 - int(22 * s), top + int(34 * s)), "FIG. 1", font=self.f_note,
+               fill=c["ink2"], anchor="rm")
+        ax0, ay0 = inner + int(44 * s), top + int(80 * s)
+        ax1, ay1 = lx0 - int(36 * s), self.H - inner - int(28 * s)
+        n = len(entries)
+        cols = self._sheet_cols(n)
+        rows = (n + cols - 1) // cols
+        gap = int(34 * s)
+        pw = (ax1 - ax0 - (cols - 1) * gap) // cols
+        ph = min(pw, (ay1 - ay0 - (rows - 1) * gap) // rows)
+        pw = min(pw, int(ph * 1.3))
+        gx = ax0 + ((ax1 - ax0) - (cols * pw + (cols - 1) * gap)) // 2
+        self.grid_boxes = []
+        for i, e in enumerate(entries):
+            label, icon = e[0], e[1]
+            x0 = gx + (i % cols) * (pw + gap)
+            y0 = ay0 + (i // cols) * (ph + gap)
+            self.grid_boxes.append([x0, y0, x0 + pw, y0 + ph])
+            on = i == sel
+            col = c["sel"] if on else c["ink"]
+            d.rectangle([x0, y0, x0 + pw, y0 + ph], outline=col,
+                        width=max(3, int(3 * s)) if on else 1)
+            _icon_smooth(icon, img, x0 + pw // 2, y0 + int(ph * 0.40), int(ph * 0.34), col)
+            avail = pw - int(20 * s)
+            # One line, else two, else a size smaller - at 150-200 % text a
+            # single long word ("Peripherals") would otherwise be cut short.
+            for f in (self.f_part, self.f_body, self.f_small):
+                lines = self._wrap2(d, label, f, avail)
+                if all(d.textlength(t, font=f) <= avail for t in lines):
+                    break
+            lh = int(f.size * 1.15)
+            ty = y0 + int(ph * 0.81) - (len(lines) - 1) * lh // 2
+            for k, ln in enumerate(lines):
+                d.text((x0 + pw // 2, ty + k * lh), self._clip(d, ln, f, avail),
+                       font=f, fill=col, anchor="mm")
+            # the callout: balloon off the corner, leader into the part
+            bx, by = x0 - int(4 * s), y0 - int(4 * s)
+            rr = self._balloon(d, c, bx, by, i + 1, on)
+            tip = (x0 + int(22 * s), y0 + int(22 * s))
+            d.line([(bx + rr * 0.7, by + rr * 0.7), tip], fill=col, width=1)
+            dr = max(2, int(2.5 * s))
+            d.ellipse([tip[0] - dr, tip[1] - dr, tip[0] + dr, tip[1] + dr], fill=col)
+        self.fb.blit(img)
+
+    def _parts_list(self, d, c, sel, entries, x0, y0, x1, y1):
+        """Every test with its result this session - the whole machine at a
+        glance, without opening anything."""
+        s = self.s
+        rh = min(int(40 * s), (y1 - y0 - int(80 * s)) // (len(entries) + 2))
+        y = y0 + int(14 * s)
+        self._spaced(d, (x0 + int(18 * s), y + rh // 2), "PARTS LIST", self.f_bodyb,
+                     c["ink"], max(1, int(1.5 * s)))
+        y += rh
+        d.text((x0 + int(18 * s), y + rh // 2), "NO.", font=self.f_note, fill=c["ink2"], anchor="lm")
+        d.text((x0 + int(70 * s), y + rh // 2), "ITEM", font=self.f_note, fill=c["ink2"], anchor="lm")
+        d.text((x1 - int(18 * s), y + rh // 2), "RESULT", font=self.f_note, fill=c["ink2"], anchor="rm")
+        y += rh
+        d.line([(x0, y), (x1, y)], fill=c["ink"])
+        for i, e in enumerate(entries):
+            on = i == sel
+            res = e[2] if len(e) > 2 else ""
+            if on:
+                d.rectangle([x0 + 1, y + 1, x1 - 1, y + rh - 1], fill=c["selbg"])
+            cy = y + rh // 2
+            d.text((x0 + int(18 * s), cy), "%02d" % (i + 1),
+                   font=self.f_noteb if on else self.f_note,
+                   fill=c["sel"] if on else c["ink2"], anchor="lm")
+            resw = d.textlength(res or "-", font=self.f_noteb)
+            d.text((x0 + int(70 * s), cy),
+                   self._clip(d, e[0], self.f_body, x1 - x0 - int(100 * s) - resw),
+                   font=self.f_body, fill=c["ink"], anchor="lm")
+            if res:
+                col = PASS_ if res.startswith("PASS") else (FAIL_ if res.startswith("FAIL") else c["ink2"])
+                d.text((x1 - int(18 * s), cy), res, font=self.f_noteb, fill=col, anchor="rm")
+            else:
+                d.text((x1 - int(18 * s), cy), "-", font=self.f_note, fill=c["ink2"], anchor="rm")
+            y += rh
+            d.line([(x0, y), (x1, y)], fill=c["hair"])
+        if self.hint:
+            avail = x1 - x0 - int(36 * s)
+            lines = self._wrap2(d, " ".join(self.hint.upper().split()), self.f_note, avail)
+            lh = int(self.f_note.size * 1.3)
+            for k, ln in enumerate(lines):
+                d.text((x0 + int(18 * s), y1 - int(22 * s) - (len(lines) - 1 - k) * lh),
+                       self._clip(d, ln, self.f_note, avail),
+                       font=self.f_note, fill=c["ink2"], anchor="lm")
+
+    def _render_sheet_menu(self):
+        """A menu as a parts-list table: balloons for numbers, one column per
+        '|' cell, a heading row taken from the entries themselves."""
+        img = Image.new("RGB", (self.W, self.H), GROUND)
+        d = ImageDraw.Draw(img)
+        c = self._sheet_colours()
+        s = self.s
+        inner = self._sheet_frame(d, c)
+        top = self._title_block(img, d, c, inner)
+        self._sheet_title(d, c, inner, top)
+        for it in self.items:
+            if it[0] == "menu":
+                self._sheet_table(d, c, it[1], it[2], inner + int(22 * s), top + int(66 * s),
+                                  self.W - inner - int(22 * s), self.H - inner - int(48 * s))
+        if self.hint:
+            d.text((inner + int(22 * s), self.H - inner - int(24 * s)), self.hint.upper(),
+                   font=self.f_note, fill=c["ink2"], anchor="lm")
+        self.fb.blit(img)
+
+    def _sheet_table(self, d, c, sel, entries, x0, y0, x1, y1):
+        s = self.s
+        rh = max(int(40 * s), int(self.f_bodyb.size * 1.9))
+        cells = [[t.strip() for t in desc.split("|")] if desc else [] for _, desc in entries]
+        ncols = max([len(t) for t in cells] or [0])
+        namex = x0 + int(80 * s)
+        gap = int(40 * s)
+        colw = [max([d.textlength(t[k], font=self.f_body) for t in cells if len(t) > k] or [0])
+                for k in range(ncols)]
+        namew = max([d.textlength(n, font=self.f_bodyb) for n, _ in entries] or [0])
+        need = sum(colw) + gap * ncols
+        namew = max(int(160 * s), min(namew, x1 - namex - need))
+        colx, x = [], namex + namew + gap
+        for w in colw:
+            colx.append(x); x += w + gap
+        d.text((x0 + int(14 * s), y0 + rh // 2), "NO.", font=self.f_note, fill=c["ink2"], anchor="lm")
+        d.text((namex, y0 + rh // 2), "ITEM", font=self.f_note, fill=c["ink2"], anchor="lm")
+        if ncols == 1:
+            d.text((colx[0], y0 + rh // 2), "DESCRIPTION", font=self.f_note, fill=c["ink2"], anchor="lm")
+        y = y0 + rh
+        d.line([(x0, y), (x1, y)], fill=c["ink"], width=max(2, int(1.5 * s)))
+        room = max(1, (y1 - y) // rh)
+        # the window only moves when the selection leaves it (see _draw_menu)
+        first = 0
+        if len(entries) > room:
+            first = self._menu_first
+            if sel < first: first = sel
+            elif sel >= first + room: first = sel - room + 1
+            first = min(max(0, first), len(entries) - room)
+            self._menu_first = first
+            d.text((x1, y0 - int(30 * s)),
+                   "%d-%d OF %d" % (first + 1, first + room, len(entries)),
+                   font=self.f_note, fill=c["ink2"], anchor="rm")
+        self.menu_rows = []
+        for slot, i in enumerate(range(first, min(len(entries), first + room))):
+            name = entries[i][0]
+            on = i == sel
+            top = y + slot * rh
+            cy = top + rh // 2
+            self.menu_rows.append((i, [x0, top, x1, top + rh]))
+            if on:
+                d.rectangle([x0, top + 1, x1, top + rh - 1], fill=c["selbg"])
+            self._balloon(d, c, x0 + int(34 * s), cy, i + 1, on)
+            d.text((namex, cy), self._clip(d, name, self.f_bodyb, namew),
+                   font=self.f_bodyb, fill=c["sel"] if on else c["ink"], anchor="lm")
+            for k, v in enumerate(cells[i]):
+                w = (x1 - colx[k] - int(10 * s)) if k == ncols - 1 else colw[k]
+                d.text((colx[k], cy), self._clip(d, v, self.f_body, w),
+                       font=self.f_body, fill=c["ink"] if on else c["ink2"], anchor="lm")
+            d.line([(x0, top + rh), (x1, top + rh)], fill=c["hair"])
 
     def _grid_geometry(self, n):
         """Squares, as large as will fit, centred. Returns (cols, tile, gap, x0, y0)."""
@@ -953,7 +1816,8 @@ class Screen:
         n = len(entries)
         cols, tile, gap, gx, gy = self._grid_geometry(n)
         r = max(6, int(16 * self.s))
-        for i, (name, icon) in enumerate(entries):
+        for i, e in enumerate(entries):
+            name, icon = e[0], e[1]
             cx0 = gx + (i % cols) * (tile + gap)
             cy0 = gy + (i // cols) * (tile + gap)
             box = [cx0, cy0, cx0 + tile, cy0 + tile]
@@ -978,15 +1842,11 @@ class Screen:
     def render_grid(self, sel, entries):
         img = Image.new("RGB", (self.W, self.H), GROUND)
         d = ImageDraw.Draw(img)
-        cy = self.hdr // 2
-        rr = int(7 * self.s)
-        _draw_brand(img, self.M, cy, int(2.3 * rr))
-        d.text((self.M + 3 * rr, cy), "Hardware Diagnostic Toolkit",
-               font=self.f_brand, fill=INK, anchor="lm")
-        if self.sub:
-            for i, part in enumerate(self.sub.split("\n")[:2]):
-                d.text((self.W - self.M, cy - int(9 * self.s) + i * int(19 * self.s)),
-                       part, font=self.f_small, fill=MUTED, anchor="rm")
+        self.mode = "grid"
+        self._grid_args = (sel, entries)
+        if LOOK == "manual":
+            return self._render_sheet_grid(sel, entries)
+        self._draw_header(img, d)
         if self.title:
             d.text((self.M, self.hdr + int(14 * self.s)), self.title,
                    font=self.f_h, fill=INK, anchor="la")
@@ -997,41 +1857,101 @@ class Screen:
         self.fb.blit(img)
 
     # ---- blocking widgets ------------------------------------------
+    def _pointer_xy(self, kb, name):
+        c = kb.cursor
+        return kb.click_xy if name == "click" else ((c.x, c.y) if c else (-1, -1))
+
     def menu(self, kb, title, hint, entries):
+        """Returns the 1-based choice, 0 for back, or "wifi" when the header
+        Wi-Fi icon was clicked (or W pressed) - tui.sh opens the Wi-Fi page and
+        then asks this menu again."""
         sel = 0
+        n = len(entries)
         self.title, self.hint = title, hint
+        self._menu_first = 0
         kb.drain()                           # discard anything typed before this screen
+        redraw = True
         while True:
-            self.items = [("menu", sel, entries)]
-            self.render()
+            if redraw:
+                self.items = [("menu", sel, entries)]
+                self.render()
+            redraw = True
             name, code = kb.poll(3600)
-            if name == "up":     sel = (sel - 1) % len(entries)
-            elif name == "down": sel = (sel + 1) % len(entries)
+            if name is None: redraw = False
+            elif name in ("up", "wheelup"):     sel = (sel - 1) % n
+            elif name in ("down", "wheeldown"): sel = (sel + 1) % n
             elif name == "enter": return sel + 1
-            elif name in ("esc", "q"): return 0
+            elif name in ("esc", "q", "back"): return 0
+            elif name == "w": return "wifi"
+            elif name in ("click", "hover"):
+                xy = self._pointer_xy(kb, name)
+                if name == "click" and _in(self.status_box, xy):
+                    return "wifi"
+                hit = next((i for i, b in self.menu_rows if _in(b, xy)), None)
+                if hit is None or (name == "hover" and hit == sel):
+                    redraw = False
+                elif name == "click":
+                    return hit + 1
+                else:
+                    sel = hit
             elif name and name.isdigit():
-                pick = _pick_number(kb, name, len(entries))
+                pick = _pick_number(kb, name, n)
                 if pick: return pick
+                redraw = False
+            else:
+                redraw = False
+
+    def _grid_hit(self, n, xy):
+        if LOOK == "manual" and getattr(self, "grid_boxes", None):
+            return next((i for i, b in enumerate(self.grid_boxes[:n]) if _in(b, xy)), None)
+        cols, tile, gap, gx, gy = self._grid_geometry(n)
+        for i in range(n):
+            x0 = gx + (i % cols) * (tile + gap)
+            y0 = gy + (i // cols) * (tile + gap)
+            if x0 <= xy[0] < x0 + tile and y0 <= xy[1] < y0 + tile:
+                return i
+        return None
 
     def gridmenu(self, kb, title, hint, entries):
-        """entries: list of (label, icon). Arrow keys move in two dimensions."""
+        """entries: list of (label, icon). Arrow keys move in two dimensions;
+        the mouse hovers and clicks tiles. Same returns as menu()."""
         sel = 0
+        n = len(entries)
         self.title, self.hint = title, hint
         kb.drain()
+        redraw = True
         while True:
-            cols, _, _, _, _ = self._grid_geometry(len(entries))
-            self.render_grid(sel, entries)
+            # arrow keys move by the columns actually on screen
+            cols = self._sheet_cols(n) if LOOK == "manual" else self._grid_geometry(n)[0]
+            if redraw:
+                self.render_grid(sel, entries)
+            redraw = True
             name, code = kb.poll(3600)
-            n = len(entries)
-            if   name == "left":  sel = (sel - 1) % n
+            if name is None: redraw = False
+            elif name == "left":  sel = (sel - 1) % n
             elif name == "right": sel = (sel + 1) % n
             elif name == "up":    sel = (sel - cols) % n if sel - cols >= 0 else sel
             elif name == "down":  sel = sel + cols if sel + cols < n else sel
             elif name == "enter": return sel + 1
-            elif name in ("esc", "q"): return 0
+            elif name in ("esc", "q", "back"): return 0
+            elif name == "w": return "wifi"
+            elif name in ("click", "hover"):
+                xy = self._pointer_xy(kb, name)
+                if name == "click" and _in(self.status_box, xy):
+                    return "wifi"
+                hit = self._grid_hit(n, xy)
+                if hit is None or (name == "hover" and hit == sel):
+                    redraw = False
+                elif name == "click":
+                    return hit + 1
+                else:
+                    sel = hit
             elif name and name.isdigit():
                 pick = _pick_number(kb, name, n)
                 if pick: return pick
+                redraw = False
+            else:
+                redraw = False
 
     def msg(self, kb, title, lines):
         self.title, self.hint = title, "Enter to continue"
@@ -1043,19 +1963,35 @@ class Screen:
         yes = (default != "no")
         self.title, self.hint = title, "arrows or Y / N, Enter to confirm"
         kb.drain()
+        redraw = True
         while True:
-            items = [("line", 6 + i, l, "") for i, l in enumerate(lines)]
-            # Both choices, always. A single pill showing the current value read
-            # as though it were the only option available.
-            items.append(("choice", 6 + len(lines) + 1, yes))
-            self.items = items
-            self.render()
+            if redraw:
+                items = [("line", 6 + i, l, "") for i, l in enumerate(lines)]
+                # Both choices, always. A single pill showing the current value
+                # read as though it were the only option available.
+                items.append(("choice", 6 + len(lines) + 1, yes))
+                self.items = items
+                self.render()
+            redraw = True
             name, _ = kb.poll(3600)
             if name in ("left", "right", "up", "down"): yes = not yes
             elif name == "y": return 1
             elif name == "n": return 0
-            elif name in ("esc", "q"): return 0
+            elif name in ("esc", "q", "back"): return 0
             elif name == "enter": return 1 if yes else 0
+            elif name in ("click", "hover"):
+                xy = self._pointer_xy(kb, name)
+                hit = next((v for v, b in self.choice_boxes if _in(b, xy)), None)
+                if hit is None:
+                    redraw = False
+                elif name == "click":
+                    return 1 if hit else 0
+                elif hit == yes:
+                    redraw = False
+                else:
+                    yes = hit
+            else:
+                redraw = False
 
     def text_input(self, kb, title, prompt):
         buf = ""
@@ -1067,6 +2003,10 @@ class Screen:
                 self.items.append(("line", 10, "CAPS LOCK is on", "accent"))
             self.render()
             name, code = kb.poll(3600)
+            # Typing only - a mouse moving over the password box must not add
+            # letters or repaint the screen on every movement.
+            while name is None or name in kb.POINTER_EVENTS:
+                name, code = kb.poll(3600)
             if name == "enter": return buf
             if name == "esc": return ""
             if name == "backspace": buf = buf[:-1]
@@ -1079,7 +2019,7 @@ class Screen:
         kb.drain()
         while True:
             name, _ = kb.poll(3600)
-            if name in ("enter", "esc", "q", "space"):
+            if name in ("enter", "esc", "q", "space", "click", "back"):
                 return
 
     def pager(self, kb, title, path):
@@ -1126,11 +2066,15 @@ class Screen:
                 self.items.append(("read", ytop + i * self.readh, l, tone))
             self.render()
             name, _ = kb.poll(3600)
+            while name is None or name in ("hover", "click"):
+                name, _ = kb.poll(3600)
             if name == "down": top = min(max(0, len(lines) - per), top + 1)
             elif name == "up": top = max(0, top - 1)
+            elif name == "wheeldown": top = min(max(0, len(lines) - per), top + 3)
+            elif name == "wheelup": top = max(0, top - 3)
             elif name == "pgdn": top = min(max(0, len(lines) - per), top + per)
             elif name == "pgup": top = max(0, top - per)
-            elif name in ("q", "esc", "enter"): return
+            elif name in ("q", "esc", "enter", "back"): return
 
 
 # ---------------------------------------------------------------- keyboard test
@@ -1386,8 +2330,12 @@ class Pointer:
             if abs_bits and (direct or "touchscreen" in low or "touch screen" in low):
                 out.append(("/dev/input/" + evp[0], name, "touchscreen"))
                 continue
-            padname = any(w in low for w in ("touchpad", "trackpad", "synaptics",
-                                             "elan", "alps", "glidepoint", "clickpad"))
+            # Maker names only at the start of a word: a plain substring test
+            # read QEMU's "VirtualPS/2 VMware VMMouse" as an ALPS pad
+            # ("virtuALPS"), so the mouse was treated as a touchpad waiting
+            # for finger-down events that never come.
+            padname = bool(re.search(r"\b(touchpad|trackpad|synaptics|elan|alps|glidepoint|clickpad)",
+                                     low))
             # A precision touchpad does not always get a mousedev handler, so
             # the mouse handler cannot be a requirement - absolute axes plus
             # buttons is what actually identifies a pad.
@@ -2155,6 +3103,94 @@ def camera_test(scr, kb):
     return "%s|%d|%d|%d|%d" % (card, frames, int(fps), last_mean, dark)
 
 
+# ---------------------------------------------------------------- screen test
+# Full-screen flat colours for dead (always dark), stuck (always lit) and hot
+# pixels, plus a grey ramp for banding and a dark grey that shows backlight
+# bleed at the edges. The instruction pill fades after a moment so nothing is
+# covering the panel while the operator looks; any key brings it back.
+PIX_SCREENS = [
+    ("Black",  "look for lit dots - stuck or hot pixels",           (0, 0, 0)),
+    ("White",  "look for dark dots - dead pixels - and dust",        (255, 255, 255)),
+    ("Red",    "a dot missing its red shows dark here",              (255, 0, 0)),
+    ("Green",  "a dot missing its green shows dark here",            (0, 255, 0)),
+    ("Blue",   "a dot missing its blue shows dark here",             (0, 0, 255)),
+    ("Grey",   "look for blotches, pressure marks and uneven tint",  (128, 128, 128)),
+    ("Dark grey", "look at the edges for backlight bleed",           (24, 24, 24)),
+    ("Ramp",   "the steps should be smooth - bands or lines are a fault", None),
+]
+PIX_HINT_SECS = 2.5
+
+
+def _pix_ramp(w, h):
+    """Black to white left to right, in 32 visible steps above a smooth one."""
+    img = Image.new("RGB", (w, h))
+    d = ImageDraw.Draw(img)
+    steps = 32
+    for i in range(steps):
+        v = int(i * 255 / (steps - 1))
+        d.rectangle([i * w // steps, 0, (i + 1) * w // steps, h // 2], fill=(v, v, v))
+    # linear_gradient runs black at the top to white at the bottom; a quarter
+    # turn anticlockwise puts black on the left, matching the steps above.
+    smooth = Image.linear_gradient("L").rotate(90, expand=True).resize((w, h - h // 2))
+    img.paste(Image.merge("RGB", (smooth, smooth, smooth)), (0, h // 2))
+    return img
+
+
+def pixel_test(scr, kb):
+    s = scr.s
+    W, H = scr.W, scr.H
+    seen = set()
+    i = 0
+    kb.drain()
+    hint_until = time.time() + PIX_HINT_SECS
+    while True:
+        name, why, col = PIX_SCREENS[i]
+        seen.add(i)
+        img = _pix_ramp(W, H) if col is None else Image.new("RGB", (W, H), col)
+        now = time.time()
+        if now < hint_until:
+            d = ImageDraw.Draw(img)
+            text = "%d of %d   %s - %s" % (i + 1, len(PIX_SCREENS), name, why)
+            keys = "Space or arrows for the next colour    Esc when finished"
+            tw = max(d.textlength(text, font=scr.f_body),
+                     d.textlength(keys, font=scr.f_small)) + int(48 * s)
+            bh = int(86 * s)
+            bx, by = (W - tw) // 2, H - bh - int(40 * s)
+            d.rounded_rectangle([bx, by, bx + tw, by + bh], bh // 3,
+                                fill=(250, 250, 250), outline=(40, 40, 40), width=2)
+            d.text((W // 2, by + int(28 * s)), text, font=scr.f_bodyb,
+                   fill=(20, 20, 20), anchor="mm")
+            d.text((W // 2, by + int(60 * s)), keys, font=scr.f_small,
+                   fill=(90, 90, 90), anchor="mm")
+        scr.fb.blit(img)
+        key = "hover"
+        while key in ("hover", "wheelup", "wheeldown"):   # the pointer is hidden here
+            t = time.time()
+            wait = (hint_until - t) if t < hint_until else 600
+            key, _ = kb.poll(max(0.05, wait))
+        if key == "click":
+            key = "space"
+        elif key == "back":
+            key = "esc"
+        if key is None:
+            # Ten silent minutes (or no keyboard at all) must not leave the
+            # machine stuck on a flat colour.
+            if time.time() - hint_until > 590:
+                break
+            continue                               # the hint timed out: repaint clean
+        hint_until = time.time() + PIX_HINT_SECS
+        if key in ("space", "right", "down", "enter", "pgdn"):
+            if i == len(PIX_SCREENS) - 1:
+                break
+            i += 1
+        elif key in ("left", "up", "backspace", "pgup"):
+            i = max(0, i - 1)
+        elif key in ("esc", "q"):
+            break
+    kb.drain()
+    return "%d|%d" % (len(seen), len(PIX_SCREENS))
+
+
 def _kb_events(kb, timeout):
     """Raw (code, value) pairs - the keyboard test needs releases too."""
     out = []
@@ -2183,6 +3219,21 @@ def main():
     console(KD_GRAPHICS)
     scr = Screen(fb)
     kb = Keyboard()
+    if not kb.script:                    # no pointer in the scripted smoke test
+        fb.cursor = kb.cursor = Cursor(fb, scr.s)
+        kb.s = scr.s
+    kb.tick = scr.tick                   # clock and Wi-Fi icon, while waiting
+
+    def fullscreen(fn, *args):
+        """A test that owns the whole screen: no header refresh drawn over it,
+        and no pointer - on the black page of the screen test it would pass
+        for a stuck pixel."""
+        scr.mode = "full"
+        if fb.cursor: fb.cursor.set_enabled(False)
+        try:
+            return fn(*args)
+        finally:
+            if fb.cursor: fb.cursor.set_enabled(True)
 
     def cleanup(*_):
         try: kb.close()
@@ -2227,12 +3278,15 @@ def main():
                 parts = raw.decode("utf-8", "replace").split("\t")
                 op = parts[0]
                 if op not in ("kv", "line", "bar", "trow"):
-                    sys.stderr.write("> %s\n" % raw.decode("utf-8", "replace")[:160])
+                    # TABs shown as " | ": raw, they came out as boxes in the
+                    # Toolkit log and ran the fields together.
+                    sys.stderr.write("> %s\n" % " | ".join(parts)[:160])
                     sys.stderr.flush()
                 # A blocking command must not sit on the keyboard while the
                 # screen still shows the previous frame.
                 if dirty and op in ("waitkey", "anykey", "menu", "confirm",
-                                    "input", "msg", "pager", "kbtest", "gridmenu", "ptrtest", "camtest", "tstest"):
+                                    "input", "msg", "pager", "kbtest", "gridmenu", "ptrtest", "camtest", "tstest",
+                                    "pixtest"):
                     scr.render(); dirty = False
                 try:
                     if op == "frame":
@@ -2272,6 +3326,8 @@ def main():
                         val = parts[2] if len(parts) > 2 else ""
                         if key == "theme":
                             apply_theme(val)
+                        elif key == "look" and val in ("manual", "classic"):
+                            globals()["LOOK"] = val
                         elif key == "textscale":
                             try:
                                 globals()["TEXT_SCALE"] = max(0.75, min(2.5, float(val)))
@@ -2290,8 +3346,11 @@ def main():
                     elif op == "gridmenu":
                         entries = []
                         for e in parts[3:]:
-                            label, _, icon = e.partition("|")
-                            entries.append((label.strip(), icon.strip() or "info"))
+                            # Label|icon|result - the result ("PASS 14:02") is
+                            # optional and fills the sheet's parts list
+                            label, _, rest = e.partition("|")
+                            icon, _, res = rest.partition("|")
+                            entries.append((label.strip(), icon.strip() or "info", res.strip()))
                         reply(scr.gridmenu(kb, parts[1], parts[2], entries)); dirty = False
                     elif op == "msg":
                         scr.msg(kb, parts[1], parts[2:]); reply("ok"); dirty = False
@@ -2304,17 +3363,33 @@ def main():
                     elif op == "pager":
                         scr.pager(kb, parts[1], parts[2]); reply("ok"); dirty = False
                     elif op == "waitkey":
-                        name, _ = kb.poll(float(parts[1]))
+                        # Keys only: a test polling for Q must neither return
+                        # early nor be stopped because the mouse moved.
+                        end = time.time() + float(parts[1])
+                        name = None
+                        while time.time() < end:
+                            name, _ = kb.poll(max(0.01, end - time.time()))
+                            if name not in Keyboard.POINTER_EVENTS:
+                                break
+                            name = None
                         reply(name or "")
                     elif op == "camtest":
-                        reply(camera_test(scr, kb)); dirty = True
+                        reply(fullscreen(camera_test, scr, kb)); dirty = True
                     elif op == "ptrtest":
-                        reply(pointer_test(scr, kb, parts[1] if len(parts) > 1
-                                           else "touchpad")); dirty = True
+                        reply(fullscreen(pointer_test, scr, kb, parts[1] if len(parts) > 1
+                                         else "touchpad")); dirty = True
                     elif op == "kbtest":
-                        reply(keyboard_test(scr, kb)); dirty = True
+                        reply(fullscreen(keyboard_test, scr, kb)); dirty = True
                     elif op == "tstest":
-                        reply(touchscreen_test(scr, kb)); dirty = True
+                        reply(fullscreen(touchscreen_test, scr, kb)); dirty = True
+                    elif op == "pixtest":
+                        reply(fullscreen(pixel_test, scr, kb)); dirty = True
+                    elif op == "ptrprobe":
+                        # How many devices of a kind are there right now -
+                        # lets touchpad.sh look for a driver before the test
+                        # screen, rather than after a "nothing found" page.
+                        want = parts[1] if len(parts) > 1 else "touchpad"
+                        reply(sum(1 for _, _, k in Pointer._devices() if k == want))
                     elif op == "quit":
                         cleanup()
                 except Exception as exc:          # never let one bad command kill the UI
@@ -2323,12 +3398,15 @@ def main():
                                      % (op, exc, traceback.format_exc()))
                     sys.stderr.flush()
                     if op in ("menu", "confirm", "input", "msg", "anykey",
-                              "pager", "waitkey", "kbtest", "gridmenu", "ptrtest", "camtest", "tstest"):
+                              "pager", "waitkey", "kbtest", "gridmenu", "ptrtest", "camtest", "tstest",
+                              "pixtest", "ptrprobe"):
                         reply("")
             now = time.time()
             if dirty and now - last_paint >= 0.1 and \
                     (building is None or now - building > 1.5):
                 scr.render(); dirty = False; last_paint = now; building = None
+            elif not dirty and building is None:
+                scr.tick()           # the header clock, between script frames
     finally:
         cleanup()
 

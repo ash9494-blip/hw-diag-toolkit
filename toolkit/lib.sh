@@ -7,9 +7,16 @@
 # dhclient) from inheriting the lock and keeping it after the menu restarts -
 # which left the menu unable to come back after the Command prompt.
 # menu.sh sources this before it takes the lock, so it is unaffected.
-exec 8>&- 2>/dev/null
+#
+# Only fd 8. This line once read `exec 8>&- 2>/dev/null`, and a bare exec
+# makes every redirection permanent: stderr went to /dev/null in every script,
+# including the bash behind Command prompt - which then decided it was not
+# interactive, showed no prompt, echoed arrow keys as ^[[A and swallowed every
+# error message. Closing an fd that is not open is not an error, so nothing
+# needs silencing here.
+exec 8>&-
 
-DIAG_VERSION="1.11.0"
+DIAG_VERSION="1.13.0"
 RUN_DIR=/run/diag
 REPORT_TXT="$RUN_DIR/report.txt"
 SUMMARY_KV="$RUN_DIR/summary.kv"
@@ -49,7 +56,31 @@ rsection() {
     echo "================================================================================"; } >> "$REPORT_TXT"
   hdr "$*"
 }
-set_kv() { printf '%s=%s\n' "$1" "$2" >> "$SUMMARY_KV"; }
+set_kv() {
+  printf '%s=%s\n' "$1" "$2" >> "$SUMMARY_KV"
+  # When it was written, for the parts list on the home screen ("PASS 14:02").
+  printf '%s %s\n' "$1" "$(date +%H:%M)" >> "$RUN_DIR/results.at"
+}
+
+# A test's latest verdict as the home screen shows it: "PASS 14:02",
+# "FAIL 14:31", or nothing when it has not run since boot. The first key that
+# has a value wins, so a tile can fall back to a lesser result (the drive's
+# SMART health when no benchmark has run).
+test_result() {   # KEY...
+  local k v t
+  for k in "$@"; do
+    v=$(grep "^$k=" "$SUMMARY_KV" 2>/dev/null | tail -1 | cut -d= -f2-)
+    [ -n "$v" ] || continue
+    t=$(awk -v k="$k" '$1==k{t=$2} END{print t}' "$RUN_DIR/results.at" 2>/dev/null)
+    v=${v%%[ (]*}
+    case "$v" in
+      PASSED) v=PASS ;;  FAILED) v=FAIL ;;  NOT) v="NOT TESTED" ;;  INCOMPLETE) v=PART ;;
+    esac
+    printf '%s %s' "$v" "$t"
+    return 0
+  done
+  return 0
+}
 
 # ---------- operator settings ----------
 # Written by settings.sh, read by anything that has a default worth changing.
@@ -352,22 +383,49 @@ secs_ms()  { printf '%d min %02d s' $(( $1/60 )) $(( $1%60 )); }
 # before each attempt so the screen can say what is happening.
 WIFI_SCAN_LOG=$RUN_DIR/wifi_scan.log
 
+# Security is read from the authentication suites, not from the mere presence
+# of an RSN element. Every network used to come out as "WPA2/3", which hid the
+# two cases that cannot be joined the ordinary way: WPA3-only (needs SAE, and a
+# WPA2 key is simply refused) and Enterprise (needs a username, not a password).
+#
+# The SSID stays exactly as iw printed it, with unprintable bytes as \xNN, so
+# it can be turned back into the real bytes when joining. A network that
+# broadcasts a run of zero bytes is hiding its name the other way, and was
+# listed as "\x00\x00\x00..." - it counts as hidden now.
 _wifi_parse_scan() {   # raw-file out-file
   awk '
-    /^BSS /            { if (inbss) emit(); inbss=1; sig=""; fr=""; ssid=""; enc="open" }
+    /^BSS /            { if (inbss) emit(); inbss=1; sig=""; fr=""; ssid=""
+                         rsn=0; wpa=0; priv=0; akm="" }
     /signal:/          { sig=$2+0 }
     /freq:/            { if (fr == "") fr=$2+0 }
     /^\tSSID:/         { ssid=substr($0,8) }
-    /RSN:/             { enc="WPA2/3" }
-    /WPA:/             { if (enc=="open") enc="WPA" }
-    /Privacy/          { if (enc=="open") enc="WEP" }
+    /^\tRSN:/          { rsn=1 }
+    /^\tWPA:/          { wpa=1 }
+    /Authentication suites:/ { akm = akm " " substr($0, index($0, ":") + 1) }
+    /capability:.*Privacy/   { priv=1 }
     END                { if (inbss) emit() }
-    function emit() {
+    function emit(  enc) {
       gsub(/\t/, " ", ssid)
-      if (ssid ~ /^[ \t]*$/) ssid="(hidden)"
+      if (ssid ~ /^[ \t]*$/ || ssid ~ /^(\\x00)+$/) ssid="(hidden)"
+      enc="open"
+      if (akm ~ /802\.1X/ && akm !~ /PSK|SAE/)      enc="Enterprise"
+      else if (akm ~ /OWE/ && akm !~ /PSK|SAE/)     enc="OWE"
+      else if (rsn && akm ~ /SAE/ && akm ~ /PSK/)   enc="WPA2/3"
+      else if (rsn && akm ~ /SAE/)                  enc="WPA3"
+      else if (rsn)                                 enc="WPA2"
+      else if (wpa)                                 enc="WPA"
+      else if (priv)                                enc="WEP"
       printf "%d\t%d\t%s\t%s\n", sig, fr, enc, ssid
     }' "$1" | sort -t$'\t' -rn -k1,1 | awk -F'\t' '!seen[$4]++' > "$2"
 }
+
+# The SSID for people: \xNN turned back into bytes (so a name in Chinese or
+# with an emoji reads properly) with control characters dropped, and "|"
+# swapped out because it separates the columns of a menu entry.
+wifi_ssid_show() { printf '%b' "$1" | tr -d '\000-\037\177' | tr '|' '/'; }
+# The SSID for wpa_supplicant: the exact bytes, as hex, so quotes, spaces and
+# non-ASCII in a network name cannot break the config file.
+wifi_ssid_hex()  { printf '%b' "$1" | od -An -tx1 -v | tr -d ' \n'; }
 
 wifi_scan_tsv() {   # iface out-file -> 0 when at least one access point was heard
   local i=$1 out=$2 raw=$RUN_DIR/wifi_scan.raw err=$RUN_DIR/wifi_scan.err n rc
@@ -418,4 +476,194 @@ wifi_scan_explain() {
     *"heard no"*)    echo "The radio works but heard nothing - suspect the antenna leads." ;;
     *)               echo "$WIFI_SCAN_ERR" ;;
   esac
+}
+
+# ---------------------------------------------------------------- wireless join
+# One way of getting onto a network, for the Wi-Fi page.
+#
+# The first version on a real TECRA A40-J (AX201) associated and then reported
+# "the network gave out no address" every time. Three things in it were wrong:
+#   * dhclient was run with -timeout, which is a Fedora patch. Ubuntu's
+#     dhclient rejects the unknown option and exits at once, so no request
+#     was ever sent - and 2>/dev/null threw the complaint away.
+#   * "associated" was taken from `iw link`, which shows the SSID as soon as
+#     the radio has joined - before the WPA handshake. Until the handshake
+#     finishes the access point drops every packet, a DHCP request included,
+#     and a wrong password looked exactly like a silent DHCP server.
+#   * nothing was logged, so the screen was all there was to go on.
+# Now the handshake is waited for through wpa_supplicant's own state, a wrong
+# password is recognised as one, DHCP runs with a hard limit and a retry, and
+# every step lands in the Toolkit log on the power menu.
+#
+# If the caller defines wifi_join_progress(text), it is called as things move.
+WIFI_JOIN_LOG=$RUN_DIR/wifi_join.log
+WPA_CTRL=/run/wpa_supplicant
+
+_wj_log()      { printf '%s %s\n' "$(date +%T)" "$*" >> "$WIFI_JOIN_LOG"; }
+_wj_progress() { declare -F wifi_join_progress >/dev/null && wifi_join_progress "$1"; return 0; }
+wifi_has_ipv4() { ip -4 addr show "$1" 2>/dev/null | grep -q 'inet '; }
+
+wifi_wpa_state() {   # iface -> COMPLETED, 4WAY_HANDSHAKE, SCANNING, ... or empty
+  wpa_cli -p "$WPA_CTRL" -i "$1" status 2>/dev/null | sed -n 's/^wpa_state=//p'
+}
+
+# Take down whatever an earlier attempt left running on this interface.
+wifi_leave() {   # iface
+  local i=$1 pf=/run/dhclient.$1.pid
+  [ -r "$pf" ] && kill "$(cat "$pf")" 2>/dev/null
+  rm -f "$pf"
+  pkill -x wpa_supplicant 2>/dev/null
+  pkill -x udhcpc 2>/dev/null
+  sleep 1
+  ip addr flush dev "$i" 2>/dev/null
+}
+
+# Writes the network block. Returns 1 with WIFI_JOIN_ERR set when the password
+# cannot possibly work, so that is said before anything is attempted.
+_wifi_write_conf() {   # conf ssid enc password
+  local conf=$1 ssid=$2 enc=$3 pass=$4 hex psk
+  hex=$(wifi_ssid_hex "$ssid")
+  {
+    printf 'ctrl_interface=%s\n' "$WPA_CTRL"
+    printf 'network={\n\tssid=%s\n\tscan_ssid=1\n' "$hex"
+    case "$enc" in
+      open) printf '\tkey_mgmt=NONE\n' ;;
+      OWE)  printf '\tkey_mgmt=OWE\n\tieee80211w=2\n' ;;
+      WEP)
+        case "${#pass}" in
+          5|13)  printf '\tkey_mgmt=NONE\n\twep_key0="%s"\n\twep_tx_keyidx=0\n' "$pass" ;;
+          10|26) printf '\tkey_mgmt=NONE\n\twep_key0=%s\n\twep_tx_keyidx=0\n' "$pass" ;;
+          *) WIFI_JOIN_ERR="a WEP key is 5 or 13 characters, or 10 or 26 hex digits"; return 1 ;;
+        esac ;;
+      WPA3)
+        # SAE cannot use a pre-hashed key: the passphrase itself goes in.
+        printf '\tkey_mgmt=SAE\n\tieee80211w=2\n\tsae_password="%s"\n' "$pass" ;;
+      *)
+        # WPA, WPA2 and WPA2/3 transition networks: plain PSK is what every
+        # card and every access point in transition mode accepts. The key is
+        # hashed here so the plaintext never sits in the file.
+        psk=$(wpa_passphrase "$(printf '%b' "$ssid")" "$pass" 2>/dev/null \
+              | sed -n 's/^[[:space:]]*psk=\([0-9a-f]\{64\}\)$/\1/p')
+        if [ -z "$psk" ]; then
+          WIFI_JOIN_ERR="a Wi-Fi password is 8 to 63 characters - that one is ${#pass}"
+          return 1
+        fi
+        printf '\tkey_mgmt=WPA-PSK WPA-PSK-SHA256\n\tieee80211w=1\n\tpsk=%s\n' "$psk" ;;
+    esac
+    printf '}\n'
+  } > "$conf"
+  chmod 600 "$conf" 2>/dev/null
+  return 0
+}
+
+# Waits for the WPA handshake to finish. 0 once wpa_supplicant says COMPLETED.
+_wifi_wait_auth() {   # iface wpa-log
+  local i=$1 wlog=$2 n st last=""
+  for n in $(seq 1 30); do
+    sleep 1
+    st=$(wifi_wpa_state "$i")
+    [ "$st" != "$last" ] && { _wj_log "  wpa state: ${st:-unknown}"; last=$st; }
+    [ "$st" = COMPLETED ] && return 0
+    # No wpa_cli answer at all: fall back to the log line wpa_supplicant
+    # writes when the handshake is done.
+    [ -z "$st" ] && grep -q 'CTRL-EVENT-CONNECTED' "$wlog" 2>/dev/null && return 0
+    if grep -q 'reason=WRONG_KEY\|4-Way Handshake failed\|pre-shared key may be incorrect' \
+         "$wlog" 2>/dev/null; then
+      WIFI_JOIN_ERR="the password was rejected"; return 1
+    fi
+    if [ "$(grep -c 'CTRL-EVENT-ASSOC-REJECT' "$wlog" 2>/dev/null)" -ge 3 ]; then
+      WIFI_JOIN_ERR="the access point refused the connection ($(grep -o 'status_code=[0-9]*' "$wlog" | tail -1))"
+      return 1
+    fi
+    if [ "$n" -ge 15 ] && grep -q 'CTRL-EVENT-NETWORK-NOT-FOUND' "$wlog" 2>/dev/null \
+         && [ "$st" = SCANNING ]; then
+      WIFI_JOIN_ERR="the network is no longer in range"; return 1
+    fi
+    case "$st" in
+      ASSOCIATING|ASSOCIATED) _wj_progress "joining the access point... ${n}s" ;;
+      4WAY_HANDSHAKE|GROUP_HANDSHAKE) _wj_progress "checking the password... ${n}s" ;;
+      *) _wj_progress "looking for the access point... ${n}s" ;;
+    esac
+  done
+  WIFI_JOIN_ERR="the access point did not finish the connection within 30 seconds"
+  return 1
+}
+
+# The plain reason DHCP failed, read from dhclient's own output.
+_wifi_dhcp_explain() {   # dhcp-log
+  local f=$1
+  if grep -q 'Unknown command\|Usage:' "$f" 2>/dev/null; then
+    echo "the address client refused its options (see the Toolkit log)"
+  elif grep -q 'not found' "$f" 2>/dev/null; then
+    echo "no DHCP client is installed in this image"
+  elif grep -q 'DHCPOFFER of' "$f" 2>/dev/null; then   # not "No DHCPOFFERS received"
+    echo "an address was offered but never confirmed - a busy or misconfigured DHCP server"
+  elif grep -q 'DHCPDISCOVER' "$f" 2>/dev/null; then
+    echo "nothing on that network answered the request for an address"
+  else
+    echo "the address request could not be sent"
+  fi
+}
+
+wifi_dhcp() {   # iface -> 0 once an IPv4 address is held
+  local i=$1 n pf=/run/dhclient.$1.pid lf=/var/lib/dhcp/dhclient.$1.leases
+  local dlog=$RUN_DIR/dhcp.$1.log
+  mkdir -p /var/lib/dhcp
+  for n in 1 2; do
+    _wj_progress "asking the network for an address (attempt $n of 2)..."
+    # dhclient -1 goes to the background once it holds a lease, so timeout only
+    # ever cuts off a request nobody answered.
+    timeout 30 dhclient -1 -v -pf "$pf" -lf "$lf" "$i" > "$dlog" 2>&1
+    _wj_log "  dhclient attempt $n, rc=$?"
+    sed 's/^/    /' "$dlog" >> "$WIFI_JOIN_LOG"
+    wifi_has_ipv4 "$i" && return 0
+    if [ "$(wifi_wpa_state "$i")" != COMPLETED ] \
+         && ! grep -q 'CTRL-EVENT-CONNECTED' "$RUN_DIR/wpa.log" 2>/dev/null; then
+      WIFI_JOIN_ERR="the link dropped while waiting for an address - suspect the antenna leads"
+      return 1
+    fi
+  done
+  # A second, unrelated client, in case the fault is in dhclient's own
+  # scripts rather than on the network.
+  if command -v udhcpc >/dev/null; then
+    _wj_progress "trying the backup address client..."
+    timeout 25 udhcpc -i "$i" -n -q -t 6 >> "$WIFI_JOIN_LOG" 2>&1
+    _wj_log "  udhcpc rc=$?"
+    wifi_has_ipv4 "$i" && return 0
+  fi
+  WIFI_JOIN_ERR=$(_wifi_dhcp_explain "$dlog")
+  return 1
+}
+
+wifi_join() {   # iface ssid(as scanned) enc password -> 0 when online
+  local i=$1 ssid=$2 enc=$3 pass=$4
+  local conf=$RUN_DIR/wpa.conf wlog=$RUN_DIR/wpa.log
+  WIFI_JOIN_ERR=""
+  _wj_log "join $(wifi_ssid_show "$ssid") on $i ($enc)"
+  if [ "$enc" = Enterprise ]; then
+    WIFI_JOIN_ERR="this is a company (802.1X) network - it needs a username, not just a password"
+    _wj_log "  refused: $WIFI_JOIN_ERR"; return 1
+  fi
+  _wifi_write_conf "$conf" "$ssid" "$enc" "$pass" || { _wj_log "  refused: $WIFI_JOIN_ERR"; return 1; }
+
+  wifi_leave "$i"
+  : > "$wlog"
+  ip link set "$i" up 2>>"$WIFI_JOIN_LOG"
+  if ! wpa_supplicant -B -i "$i" -c "$conf" -f "$wlog" 2>>"$WIFI_JOIN_LOG"; then
+    wpa_supplicant -B -i "$i" -c "$conf" 2>>"$WIFI_JOIN_LOG" || {
+      WIFI_JOIN_ERR="wpa_supplicant would not start on $i"; _wj_log "  $WIFI_JOIN_ERR"; return 1; }
+  fi
+
+  if ! _wifi_wait_auth "$i" "$wlog"; then
+    _wj_log "  failed: $WIFI_JOIN_ERR"
+    grep -E 'CTRL-EVENT|WRONG_KEY|Handshake|reason=' "$wlog" 2>/dev/null | tail -8 \
+      | sed 's/^/    /' >> "$WIFI_JOIN_LOG"
+    return 1
+  fi
+  _wj_log "  handshake complete"
+  if ! wifi_dhcp "$i"; then
+    _wj_log "  failed: $WIFI_JOIN_ERR"; return 1
+  fi
+  _wj_log "  online: $(ip -4 addr show "$i" | awk '/inet /{print $2; exit}')"
+  return 0
 }

@@ -21,6 +21,162 @@ if [ "$TUI_GUI" != 1 ]; then
   exit 0
 fi
 
+# ---------------------------------------------------------------- driver search
+# "No touchpad found" on a machine that plainly has one. On a TECRA A40-J the
+# first answer was "download the driver", but every driver a laptop touchpad
+# uses - i2c-hid, hid-multitouch, the Intel serial-IO bridge and GPIO drivers,
+# psmouse, elan_i2c, rmi4 - is already in the image; there is nothing extra to
+# fetch the way Windows would. When the pad is missing, the driver is there
+# and did not attach. So this finds the hardware the firmware describes,
+# loads the chain, binds the device by hand if it is still loose, and says
+# exactly what it saw - on screen, in the report and in the Toolkit log.
+DRV_LOG=$RUN_DIR/drivers.log
+dlog() { printf '%s %s\n' "$(date +%T)" "$*" >> "$DRV_LOG"; }
+
+# HID-over-I2C input devices the firmware lists (touchpads and touchscreens
+# both use PNP0C50): "acpi-name status driver i2c-node", one per line.
+i2c_hid_devices() {
+  local a st node drv
+  for a in /sys/bus/acpi/devices/*; do
+    grep -qE ':(PNP0C50|ACPI0C50):' "$a/modalias" 2>/dev/null || continue
+    st=$(cat "$a/status" 2>/dev/null)
+    node=$(readlink -f "$a/physical_node" 2>/dev/null)
+    drv=""
+    [ -n "$node" ] && drv=$(basename "$(readlink -f "$node/driver" 2>/dev/null)" 2>/dev/null)
+    printf '%s %s %s %s\n' "${a##*/}" "${st:-?}" "${drv:-none}" "${node##*/}"
+  done
+}
+
+# The PS/2 mouse port, which older and cheaper pads still use: its driver.
+ps2_aux() {
+  local p d
+  for p in /sys/bus/serio/devices/serio*; do
+    grep -q 'AUX' "$p/description" 2>/dev/null || continue
+    d=$(basename "$(readlink -f "$p/driver" 2>/dev/null)" 2>/dev/null)
+    printf '%s' "${d:-none}"
+    return 0
+  done
+  return 1
+}
+
+touchpad_driver_search() {   # 0 when a touchpad is present afterwards
+  tui_frame "Touchpad test" "looking for the touchpad"
+  tui_line 6 "No touchpad is reporting in. Looking for it and its driver..." ""
+  tui_flush
+  dlog "touchpad search"
+
+  local hid aux
+  hid=$(i2c_hid_devices)
+  dlog "  I2C HID devices: ${hid:-none}"
+  aux=$(ps2_aux)
+  dlog "  PS/2 aux port driver: ${aux:-no PS/2 port}"
+
+  # The chain an I2C pad needs, bottom up: the Serial IO controller, the GPIO
+  # controller that carries its interrupt (named by the firmware, so loaded
+  # by its own ID), the I2C-HID transport and the multitouch driver. Plus the
+  # PS/2 and vendor-specific pad drivers. Anything already loaded is a no-op.
+  local a m
+  for a in /sys/bus/acpi/devices/INT34[BC]*/modalias /sys/bus/acpi/devices/INTC10*/modalias; do
+    [ -r "$a" ] && modprobe -b -q "$(cat "$a")" 2>>"$DRV_LOG"
+  done
+  for m in intel_lpss_pci intel_lpss_acpi i2c_hid_acpi hid_multitouch hid_generic \
+           psmouse elan_i2c rmi_i2c; do
+    modprobe -b -q "$m" 2>>"$DRV_LOG" || dlog "  modprobe $m failed"
+  done
+  sleep 2
+
+  # Loaded but still not attached: ask for the bind explicitly and keep the
+  # kernel's answer, which is the most useful line in the whole search.
+  local name st drv node
+  while read -r name st drv node; do
+    [ -n "$node" ] && [ "$drv" = none ] || continue
+    dlog "  binding $node to i2c_hid_acpi"
+    echo "$node" > /sys/bus/i2c/drivers/i2c_hid_acpi/bind 2>>"$DRV_LOG" \
+      || dlog "  bind refused"
+  done <<< "$(i2c_hid_devices)"
+  sleep 2
+
+  dmesg 2>/dev/null | grep -iE 'i2c_hid|i2c-hid|hid-multitouch|hid_multitouch|psmouse|elan_i2c|synaptics|rmi4|intel-lpss|i2c_designware|PNP0C50' \
+    | tail -12 | sed 's/^/    /' >> "$DRV_LOG"
+
+  # What the kernel actually made of it: every input device with its axes and
+  # properties, and which HID driver took each HID device. The A40-J case
+  # ("driver attached, no touchpad") cannot be told apart without these.
+  dlog "  input devices:"
+  grep -E '^N:|^H:|^B: (EV|ABS|REL|PROP)=' /proc/bus/input/devices 2>/dev/null \
+    | sed 's/^/    /' >> "$DRV_LOG"
+  dlog "  HID driver bindings:"
+  local h
+  for h in /sys/bus/hid/devices/*; do
+    [ -e "$h" ] || continue
+    printf '    %s -> %s\n' "${h##*/}" \
+      "$(basename "$(readlink -f "$h/driver" 2>/dev/null)" 2>/dev/null)" >> "$DRV_LOG"
+  done
+
+  tui_ptrprobe touchpad
+  dlog "  touchpads now: $PTR_COUNT"
+  [ "${PTR_COUNT:-0}" -gt 0 ] && return 0
+
+  # Still nothing: say what was seen, which is what decides the next step.
+  hid=$(i2c_hid_devices)
+  local row=8 disabled=0 loose=0 verdict
+  while read -r name st drv node; do
+    [ -n "$name" ] || continue
+    [ "$st" = 0 ] && disabled=1
+    [ "$drv" = none ] && loose=1
+  done <<< "$hid"
+
+  tui_frame "Touchpad test" "Enter to go back"
+  tui_badge 6 UNKNOWN "no touchpad found"
+  if [ -z "$hid" ] && [ "${aux:-none}" = none ]; then
+    tui_line $row "The firmware lists no touchpad at all - not on I2C, not on PS/2." ""; row=$((row+2))
+    tui_line $row "Most likely, in order:" muted; row=$((row+1))
+    tui_line $row "  1. Turned off in the BIOS setup (look for Touch Pad / Pointing Device)" ""; row=$((row+1))
+    tui_line $row "  2. Turned off with the touchpad function key (Fn + the pad icon)" ""; row=$((row+1))
+    tui_line $row "  3. The flex cable is unplugged or the pad is dead" ""
+    verdict="NOT TESTED (no touchpad listed by the firmware - BIOS, Fn key or cable)"
+  elif [ "$disabled" = 1 ]; then
+    tui_line $row "The firmware lists a touchpad but marks it disabled." warn; row=$((row+2))
+    tui_line $row "Enable it in the BIOS setup or with the touchpad function key," ""; row=$((row+1))
+    tui_line $row "then run this test again." ""
+    verdict="NOT TESTED (touchpad present but disabled by the firmware)"
+  elif [ "$loose" = 1 ]; then
+    tui_line $row "A touchpad is listed but its driver would not attach:" warn; row=$((row+1))
+    tui_line $row "  $(printf '%s' "$hid" | awk '$3=="none"{print $1; exit}')" ""; row=$((row+2))
+    tui_line $row "It did not answer on its I2C bus - usually the flex cable, or the" ""; row=$((row+1))
+    tui_line $row "pad itself. Reseat the cable and try again." ""
+    verdict="FAIL (touchpad listed by the firmware but did not respond on I2C)"
+  else
+    # Touchscreens are PNP0C50 too, so an attached device here may be the
+    # screen rather than the pad.
+    tui_line $row "Every touch device the firmware lists has its driver, but none of" warn; row=$((row+1))
+    tui_line $row "them is a touchpad (an attached one may be the touchscreen)." warn; row=$((row+2))
+    tui_line $row "Check the pad's flex cable, and retry after a full power off." ""
+    verdict="FAIL (touch drivers attached but no touchpad reports in)"
+  fi
+  tui_line 18 "The kernel's own messages are in the report and the Toolkit log." muted
+  tui_flush
+
+  rsection "TOUCHPAD TEST"
+  rsilent "Driver search     : no touchpad appeared after loading the drivers"
+  rsilent "I2C HID devices   : $(printf '%s' "${hid:-none}" | tr '\n' ';' | sed 's/;$//')"
+  rsilent "PS/2 port driver  : ${aux:-no PS/2 port}"
+  sed 's/^/  /' "$DRV_LOG" >> "$REPORT_TXT"
+  rsilent "RESULT: $verdict"
+  set_kv TOUCHPAD_RESULT "$verdict"
+  tui_anykey
+  return 1
+}
+
+if [ "$MODE" = touchpad ]; then
+  tui_ptrprobe touchpad
+  if [ "${PTR_COUNT:-0}" = 0 ]; then
+    touchpad_driver_search || exit 0
+    tui_msg "Touchpad found" "The touchpad driver was not running and has now been started." "" \
+      "The test starts next."
+  fi
+fi
+
 tui_frame "$LABEL test" "Enter to start"
 if [ "$MODE" = touchpad ]; then
   tui_line 6  "Slide one finger slowly over the whole pad, corner to corner."

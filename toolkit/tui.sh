@@ -73,9 +73,24 @@ tui_flush() { _s flush; }
 # Change a renderer setting (theme, textscale) for the rest of the session.
 tui_setting() { _s setting "$1" "$2"; }
 
+# The Wi-Fi icon in the header (click it, or press W) answers a menu with
+# "wifi". The Wi-Fi page opens right there and the same menu comes back
+# afterwards, so no caller has to know about it. Not from inside the Wi-Fi page
+# itself - wificonnect.sh sets DIAG_IN_WIFI - or it would open inside itself.
+_wifi_shortcut() {
+  [ -n "$DIAG_IN_WIFI" ] && return 0
+  DIAG_IN_WIFI=1 /opt/diag/wificonnect.sh
+  [ -n "$TUI_SUB" ] && _send_sub "$TUI_SUB"
+  return 0
+}
+
 tui_menu() {
   local title=$1 hint=$2; shift 2
-  _ask menu "$title" "$hint" "$@"
+  while :; do
+    _ask menu "$title" "$hint" "$@"
+    [ "$UI_ANS" = wifi ] || break
+    _wifi_shortcut
+  done
   case "$UI_ANS" in ''|0|*[!0-9]*) return 1 ;; esac
   TUI_CHOICE=$UI_ANS
   return 0
@@ -85,7 +100,11 @@ tui_menu() {
 # grid of square tiles. The text interface falls back to the list.
 tui_grid() {
   local title=$1 hint=$2; shift 2
-  _ask gridmenu "$title" "$hint" "$@"
+  while :; do
+    _ask gridmenu "$title" "$hint" "$@"
+    [ "$UI_ANS" = wifi ] || break
+    _wifi_shortcut
+  done
   case "$UI_ANS" in ''|0|*[!0-9]*) return 1 ;; esac
   TUI_CHOICE=$UI_ANS
   return 0
@@ -124,6 +143,12 @@ tui_ptrtest() { _ask ptrtest "$1"; PTR_SUMMARY=$UI_ANS; }
 # coverage%, dead cells, device names, most fingers at once, ghost touches,
 # total contacts, touch points supported, uncalibrated flag, dead cell list.
 tui_tstest() { _ask tstest; TS_SUMMARY=$UI_ANS; }
+
+# Number of pointing devices of a kind ("touchpad", "mouse") present right now.
+tui_ptrprobe() { _ask ptrprobe "$1"; PTR_COUNT=${UI_ANS:-0}; }
+
+# Full-screen colours for dead and stuck pixels. Returns "screens-seen|total".
+tui_pixtest() { _ask pixtest; PIX_SUMMARY=$UI_ANS; }
 
 # Live camera preview inside the renderer. Returns pipe-separated:
 # card name, frames grabbed, fps, mean brightness, dark-frame count.
