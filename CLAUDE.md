@@ -5,8 +5,8 @@ Bootable USB/ISO for bench-testing laptops at Data Dynamics (Johor). Owner: Ash
 minimal Ubuntu live system straight into a full-screen tile menu of hardware
 tests, and writes a per-machine report to the USB stick.
 
-**Current version: 1.13.0** (`toolkit/lib.sh` → `DIAG_VERSION`).
-Last delivered ISO: 1.11.0, SHA256 `8d17bda0b035863ac2790382465034e4795dcd32c03e505bb437f09bbecd2c75`.
+**Current version: 1.15.0** (`toolkit/lib.sh` → `DIAG_VERSION`).
+Last delivered ISO: 1.15.0, SHA256 `b64bea32446eb13a44eafe23b1ae2aee8c634e397086a012d9c3104a696fb123`.
 Version history and the reasoning behind past changes: `docs/HISTORY.md`.
 
 ## Layout
@@ -23,6 +23,11 @@ toolkit/            everything that ends up in /opt/diag on the image
   menu.sh           entry point (autologin on tty1/ttyS0), tile menus, dispatcher
   lib.sh            shared helpers, report writing, disk/mem helpers, Wi-Fi scan
   tui.sh            tui_* API -> FIFO -> ui.py; falls back to tui-text.sh (ANSI)
+  drivers.sh        Driver check library: device scan (PCI/USB/I2C/ACPI), state
+                    per device, firmware download + removal (sourced)
+  drivercheck.sh    Driver check screen + per-device Fix; --quiet = scan + report
+  ctrltest.sh       SSD controller check (HDD/SSD menu), read only
+  chargetest.sh     Charging test (Peripherals); writes $RUN_DIR/charge.step
   ui.py             Pillow framebuffer renderer (/dev/fb0), all screens + the
                     interactive tests (keyboard, pointer, touchscreen, camera)
   *test.sh etc      one script per test
@@ -149,6 +154,19 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   nothing visible; drive the pointer with QMP `input-send-event` type `abs`.
   Esc/right-click on the home grid opens the power menu, where "1" = Reboot -
   scripted key sequences have rebooted the VM into MemTest86+ twice.
+- Cable ports boot switched off, and an off port reports no carrier even
+  with a cable in: `ip link set X up` before checking (`wired_online` in
+  drivers.sh). Get firmware's "is a cable plugged in?" always said no.
+- Everything the kernel ships is already on the image (linux-modules +
+  -extra); "download a driver" means firmware. Driver check judges a device
+  by what its driver *made* (card / netdev / input / video / hci), not by
+  "driver attached" - the A40-J touchpad and sound were attached and dead.
+- No i915 means Intel sound (SOF / HDA, 6th gen+) waits forever for it and
+  makes no sound card ("init of i915 and HDMI codec failed", deferred probe).
+  `snd_hda_core gpu_bind=0` (/etc/modprobe.d/diag-audio.conf) - never remove.
+- nvme-cli 2.8 JSON: plain numbers, temperatures in Kelvin, `psds[]` with
+  `entry_lat`/`exit_lat`/`non-operational_state`. get-feature 0x0c errors on
+  drives without APST - only ask when `apsta` is 1.
 - Ubuntu's `dhclient` has no `-timeout` (Fedora patch) — wrap it in
   `timeout N` instead. Never `2>/dev/null` a network tool; log it.
 - `iw link` shows the SSID before the WPA handshake completes; use
@@ -157,6 +175,11 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   cells as `name|col|col` or use `tui_thead`/`tui_trow`.
 
 ## Open items
+
+- **1.15 needs real-hardware checks**: A40-J sound with gpu_bind=0 (and the
+  legacy-HDA fallback, never exercised); controller-check wake timing (QEMU
+  NVMe has no APST); Charging test on a real charger, DC jack and USB-C/UCSI
+  (VM-tested only with the `test_power` module).
 
 - **Wi-Fi on the real AX201 (`wlo1`)**: 1.11 scanning works on the A40-J
   (attempt 1 timed out, attempt 2 found 26 APs). 1.12 fixes the "no address"

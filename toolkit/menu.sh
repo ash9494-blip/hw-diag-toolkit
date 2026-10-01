@@ -69,11 +69,11 @@ if [ ! -f "$RUN_DIR/.seeded" ]; then
     [ -f "$m/diag-settings.conf" ] && { cp "$m/diag-settings.conf" "$RUN_DIR/settings.conf"; break; }
   done
   /opt/diag/sysinfo.sh --quiet
-  # Firmware-load failures are printed once, while the drivers bind at boot.
-  # The ring buffer rolls over on a chatty machine and a long test can push
-  # them out, so the record is kept here the moment the toolkit starts. Get
-  # firmware reads this as well as the live log.
-  dmesg 2>/dev/null | grep -iE 'firmware|microcode' > "$RUN_DIR/boot-firmware.log" 2>/dev/null
+  # Firmware-load failures and driver errors are printed once, while the
+  # drivers bind at boot. The ring buffer rolls over on a chatty machine and a
+  # long test can push them out, so the whole boot log is kept here the moment
+  # the toolkit starts. Driver check reads this as well as the live log.
+  dmesg > "$RUN_DIR/boot-dmesg.log" 2>/dev/null
   touch "$RUN_DIR/.seeded"
 fi
 
@@ -103,7 +103,7 @@ full_run() {
   [ -z "$disk" ] && diskline="Disk benchmark                                  skipped, no drive found"
 
   tui_confirm "Full diagnostic run" yes \
-    "1.  System info, battery health, SMART          about 1 min" \
+    "1.  System info, drivers, battery, SMART        about 1 min" \
     "2.  $diskline" \
     "3.  CPU stress and temperature log              about 10 min" \
     "4.  RAM stress test                             about 5 min" \
@@ -113,6 +113,7 @@ full_run() {
     "" "Start now?" || return
 
   /opt/diag/sysinfo.sh --quiet
+  /opt/diag/drivercheck.sh --quiet
 
   if [ -n "$disk" ]; then
     /opt/diag/disktest.sh auto "$disk" 1G 1
@@ -210,7 +211,7 @@ $(cpu_model) - $(mem_total_mb) MB"
 
 # --- the two layouts ----------------------------------------------------------
 # Compact is the default: the six peripheral tests live behind one tile. The
-# "Show all tests" tile switches to the full sixteen, and Q there comes back.
+# "Show all tests" tile switches to every test, and Q there comes back.
 # The choice lasts until reboot, so it is not re-made after every test.
 LAYOUT_FILE=$RUN_DIR/layout
 layout() { cat "$LAYOUT_FILE" 2>/dev/null || echo compact; }
@@ -245,19 +246,19 @@ run_test() {   # one dispatcher, so both layouts stay in step
     settings) /opt/diag/settings.sh ;;
     sound)    /opt/diag/soundtest.sh ;;
     usb)      /opt/diag/usbtest.sh ;;
+    charging) /opt/diag/chargetest.sh ;;
     camera)   /opt/diag/cameratest.sh ;;
     network)  /opt/diag/nettest.sh ;;
     system)   /opt/diag/sysinfo.sh ;;
-    board)    /opt/diag/boardinfo.sh ;;
     dmi)      /opt/diag/dmicapture.sh ;;
-    firmware) /opt/diag/getfirmware.sh ;;
+    drivers)  /opt/diag/drivercheck.sh ;;
     results)  view_report ;;
     save)     /opt/diag/savereport.sh ;;
   esac
 }
 
 peripherals_menu() {
-  local acts=(all screen touchpad touchscreen sound usb camera network wireless firmware)
+  local acts=(all screen touchpad touchscreen sound usb charging camera network wireless drivers)
   while :; do
     tui_grid "Peripherals" "arrows to move, Enter to select      Q = back" \
       "Run them all|grid" \
@@ -266,13 +267,14 @@ peripherals_menu() {
       "Touchscreen|touchscreen|$(test_result TOUCHSCREEN_RESULT)" \
       "Sound|sound|$(test_result SOUND_RESULT)" \
       "USB ports|usb|$(test_result USB_RESULT)" \
+      "Charging|charge|$(test_result CHARGE_RESULT)" \
       "Camera|camera|$(test_result CAMERA_RESULT)" \
       "Ethernet Network|network|$(test_result ETHERNET_RESULT)" \
       "Wireless test|wifi|$(test_result WIFI_RESULT)" \
-      "Get firmware|download" || return
+      "Driver check|download|$(test_result DRIVER_RESULT)" || return
     if [ "${acts[$((TUI_CHOICE-1))]}" = all ]; then
       local t
-      for t in screen touchpad touchscreen sound usb camera network wireless; do run_test "$t"; done
+      for t in screen touchpad touchscreen sound usb charging camera network wireless; do run_test "$t"; done
     else
       run_test "${acts[$((TUI_CHOICE-1))]}"
     fi
@@ -280,17 +282,17 @@ peripherals_menu() {
 }
 
 compact_menu() {
-  local acts=(fullrun disk cpu ram battery keyboard peripherals wificonnect system board dmi results save shell settings showall)
+  local acts=(fullrun disk cpu ram battery keyboard peripherals showall wificonnect drivers dmi results save shell system settings)
   tui_grid "Choose a test" "arrows or its number (two digits for 10+), Enter to select      Q = power menu" \
     "Full run|play" \
-    "HDD / SSD|disk|$(test_result DISK_RESULT DISK_SELFTEST DISK_SMART)" \
+    "HDD / SSD|disk|$(test_result DISK_RESULT DISK_CTRL DISK_SELFTEST DISK_SMART)" \
     "CPU|cpu|$(test_result CPU_RESULT)" \
     "RAM|ram|$(test_result RAM_RESULT)" \
     "Battery|battery|$(test_result BATTERY_RESULT)" \
     "Keyboard|keyboard|$(test_result KEYBOARD_RESULT)" \
-    "Peripherals|grid" "Wi-Fi|wifi" "System|info" "Machine details|pencil" \
-    "DMI capture|chip" "Results|list" "Save report|save" "Command prompt|terminal" \
-    "Settings|gear" "Show all tests|expand" || return 1
+    "Peripherals|grid" "Show all tests|expand" "Wi-Fi|wifi" \
+    "Driver check|download|$(test_result DRIVER_RESULT)" "DMI capture|chip" "Results|list" "Save report|save" "Command prompt|terminal" \
+    "System|info" "Settings|gear" || return 1
   case "${acts[$((TUI_CHOICE-1))]}" in
     peripherals) peripherals_menu ;;
     showall)     set_layout all ;;
@@ -300,10 +302,10 @@ compact_menu() {
 }
 
 expanded_menu() {
-  local acts=(fullrun disk cpu ram battery keyboard screen touchpad touchscreen sound usb camera network wificonnect wireless system board dmi firmware results save shell settings)
+  local acts=(fullrun disk cpu ram battery keyboard screen touchpad touchscreen sound usb charging camera network wificonnect wireless drivers dmi results save shell system settings)
   tui_grid "Every test" "arrows or its number, Enter to select      Q = back to the short list" \
     "Full run|play" \
-    "HDD / SSD|disk|$(test_result DISK_RESULT DISK_SELFTEST DISK_SMART)" \
+    "HDD / SSD|disk|$(test_result DISK_RESULT DISK_CTRL DISK_SELFTEST DISK_SMART)" \
     "CPU|cpu|$(test_result CPU_RESULT)" "RAM|ram|$(test_result RAM_RESULT)" \
     "Battery|battery|$(test_result BATTERY_RESULT)" \
     "Keyboard|keyboard|$(test_result KEYBOARD_RESULT)" \
@@ -311,11 +313,13 @@ expanded_menu() {
     "Touchpad|touchpad|$(test_result TOUCHPAD_RESULT)" \
     "Touchscreen|touchscreen|$(test_result TOUCHSCREEN_RESULT)" \
     "Sound|sound|$(test_result SOUND_RESULT)" \
-    "USB ports|usb|$(test_result USB_RESULT)" "Camera|camera|$(test_result CAMERA_RESULT)" \
+    "USB ports|usb|$(test_result USB_RESULT)" "Charging|charge|$(test_result CHARGE_RESULT)" \
+    "Camera|camera|$(test_result CAMERA_RESULT)" \
     "Ethernet Network|network|$(test_result ETHERNET_RESULT)" "Wi-Fi|wifi" \
-    "Wireless test|wifi|$(test_result WIFI_RESULT)" "System|info" \
-    "Machine details|pencil" "DMI capture|chip" "Get firmware|download" \
-    "Results|list" "Save report|save" "Command prompt|terminal" "Settings|gear" \
+    "Wireless test|wifi|$(test_result WIFI_RESULT)" \
+    "Driver check|download|$(test_result DRIVER_RESULT)" "DMI capture|chip" \
+    "Results|list" "Save report|save" "Command prompt|terminal" \
+    "System|info" "Settings|gear" \
     || { set_layout compact; return 0; }
   run_test "${acts[$((TUI_CHOICE-1))]}"
   return 0

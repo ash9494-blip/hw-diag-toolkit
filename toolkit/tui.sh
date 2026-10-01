@@ -112,6 +112,18 @@ tui_grid() {
 
 tui_msg() { local t=$1; shift; _ask msg "$t" "$@"; }
 
+# A line too long for the screen, wrapped at word boundaries over the rows
+# from $1 (a single tui_line is cut off at the edge). Echoes the next free row.
+tui_para() {   # row text [tone] [width]
+  local row=$1 text=$2 tone=${3:-} w=${4:-95} line
+  while [ -n "$text" ]; do
+    if [ ${#text} -le "$w" ]; then line=$text; text=""
+    else line=${text:0:$w}; line=${line% *}; text=${text:${#line}}; text=${text# }; fi
+    tui_line "$row" "$line" "$tone"; row=$((row+1))
+  done
+  echo "$row"
+}
+
 tui_confirm() {
   local t=$1 d=$2; shift 2
   _ask confirm "$t" "$d" "$@"
