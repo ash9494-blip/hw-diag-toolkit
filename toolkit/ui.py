@@ -131,6 +131,12 @@ def apply_theme(name):
     _BRAND_CACHE.clear()
     return True
 
+def anim_palette():
+    """The current colours by name, for ssdanim.py - it runs in this process
+    but is a separate module, so it cannot see the rebound globals itself."""
+    g = globals()
+    return {k: g[k] for k in THEMES["light"]}
+
 TONES = {
     "":       INK,   "fg": INK,     "muted": MUTED, "dim": MUTED,
     "ok":     PASS_, "warn": WARN_, "err":   FAIL_, "accent": ACCENT,
