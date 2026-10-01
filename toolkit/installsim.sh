@@ -641,7 +641,7 @@ main() {
   HMB=$(hmb_state "$(nvme_ctrl "$DISK")")
 
   # Mark where the log is now rather than clearing it: the boot-time firmware
-  # messages that Get firmware relies on must survive this test.
+  # messages that Driver check relies on must survive this test.
   DMESG_MARK=$(dmesg_mark)
   local pre post
   pre=$(nvme_state "$DISK")

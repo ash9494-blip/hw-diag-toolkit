@@ -4,6 +4,7 @@
 #   test/boot-vm.sh            # ISO as a CD, with a 24 GB virtual NVMe
 #   test/boot-vm.sh usb        # ISO as a USB stick on xHCI (boot-drive tests)
 #   test/boot-vm.sh touch      # CD + virtio multitouch screen
+#   test/boot-vm.sh sound      # CD + Intel HDA sound card (Driver check, sound test)
 #
 # Screen: VNC on :9 (port 5909), or test/shot.sh NAME -> /tmp/diagvm/NAME.png
 # Keys:   test/k.sh right ret q ...       (0.7 s apart, via the HMP monitor)
@@ -30,7 +31,11 @@ case "${1:-cd}" in
   usb)   BOOT="-drive if=none,id=boot,file=$ISO,format=raw,snapshot=on -device usb-storage,bus=xhci.0,drive=boot,bootindex=0,id=bootstick" ;;
   *)     BOOT="-cdrom $ISO -boot d" ;;
 esac
-EXTRA=""; [ "${1:-}" = touch ] && EXTRA="-device virtio-multitouch-pci,id=ts"
+EXTRA=""
+case "${1:-}" in
+  touch) EXTRA="-device virtio-multitouch-pci,id=ts" ;;
+  sound) EXTRA="-audiodev none,id=snd0 -device intel-hda,id=hda -device hda-duplex,audiodev=snd0" ;;
+esac
 # setsid: survives the calling shell timing out; nohup alone does not
 setsid --fork qemu-system-x86_64 $KVM -m 3072 -smp 2 -vga std -display none -vnc :9 \
   -monitor unix:$V/mon,server,nowait -qmp unix:$V/qmp,server,nowait \

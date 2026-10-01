@@ -16,15 +16,21 @@ chroot $C apt-get update >/dev/null 2>&1
 
 chroot $C apt-get install -y --no-install-recommends jq zstd \
     iproute2 iputils-ping ethtool isc-dhcp-client \
-    alsa-utils v4l-utils usbutils fonts-crosextra-carlito \
+    alsa-utils alsa-ucm-conf v4l-utils usbutils pciutils fonts-crosextra-carlito \
     fonts-dejavu-core \
     iw wpasupplicant rfkill wireless-regdb curl 2>&1 | tail -2
 # Fail loudly rather than shipping an image missing the tools a test needs.
-for t in iw wpa_supplicant rfkill curl dhclient; do
+for t in iw wpa_supplicant rfkill curl dhclient lspci alsaucm; do
   chroot $C sh -c "command -v $t" >/dev/null 2>&1 \
     || { echo "BUILD ABORTED - $t did not install into the image" >&2; exit 1; }
 done
-echo "wifi tooling present: iw wpa_supplicant rfkill curl dhclient"
+echo "tooling present: iw wpa_supplicant rfkill curl dhclient lspci alsaucm"
+# ALSA's use-case profiles. On 11th-gen and newer laptops the sound DSP (SOF)
+# comes up with its speaker and headphone paths switched off; these profiles
+# are what switch them on. The A40-J image had none.
+[ -d $C/usr/share/alsa/ucm2 ] \
+  || { echo "BUILD ABORTED - alsa-ucm-conf profiles missing from the image" >&2; exit 1; }
+echo "sound profiles present: $(ls $C/usr/share/alsa/ucm2 | wc -l) entries"
 # A second DHCP client, tried when dhclient gets no address. Installed on its
 # own line because it lives in universe: if it is ever unavailable, that must
 # not take the whole package list above down with it.
@@ -79,8 +85,12 @@ install_wifi_firmware() {
   # firmware-sof-signed matters as much as the wifi blobs: without it there is
   # no sound at all on 11th-gen and newer laptops. linux-firmware-realtek
   # carries rtl_nic for the wired adapter as well as the wifi parts.
+  # MediaTek, Broadcom and the newer Qualcomm cards are here too: Wi-Fi is how
+  # Driver check downloads everything else, so a card that needs a download
+  # before it can get online would leave that machine stuck.
   local pkgs="linux-firmware-intel-wireless linux-firmware-realtek
               linux-firmware-qualcomm-wireless linux-firmware-intel-misc
+              linux-firmware-mediatek linux-firmware-broadcom-wireless
               firmware-sof-signed"
   chroot $C apt-get update >/dev/null 2>&1 || true
   local p got=0
@@ -107,9 +117,16 @@ install_wifi_firmware() {
   for g in 1000 105 135 2000 2030 3945 4965 5000 5150 6000 6050 100; do
     rm -f $C/usr/lib/firmware/iwlwifi-${g}-*.ucode* 2>/dev/null
   done
-  # Qualcomm WiFi 6E/7 parts are newer than anything likely on a repair bench.
-  rm -rf $C/usr/lib/firmware/ath11k $C/usr/lib/firmware/ath12k 2>/dev/null
+  # MediaTek's package also carries firmware for its ARM tablet and router
+  # chips (mt81xx/mt8xxx, the VPU blobs) - no laptop here has those.
+  rm -rf $C/usr/lib/firmware/mediatek/mt8[0-9]* $C/usr/lib/firmware/mediatek/sof* \
+         $C/usr/lib/firmware/vpu_*.bin 2>/dev/null
   rm -rf "$work"
+  local d
+  for d in iwlwifi-* rtw88 rtw89 ath10k ath11k mediatek brcm intel/sof; do
+    ls -d $C/usr/lib/firmware/$d >/dev/null 2>&1 \
+      || echo "WARN: no $d firmware in the image" >&2
+  done
   echo "wifi firmware: $got package(s), tree now $(du -sh $C/usr/lib/firmware | cut -f1)"
 }
 install_wifi_firmware
@@ -183,6 +200,21 @@ case "$(tty)" in
     ;;
 esac
 EOF
+
+# ---- sound without the graphics driver ----
+# Intel sound (SOF and HD Audio, 6th gen onwards) waits for the i915 graphics
+# driver so it can drive HDMI audio. This image has no i915 (invariant 1), so
+# on the TECRA A40-J the sound driver waited forever and there was no sound
+# card at all: "deferred probe pending: sof-audio-pci-intel-tgl: init of i915
+# and HDMI codec failed". gpu_bind=0 tells it not to wait - speakers,
+# headphones and microphones work; HDMI audio does not, and could not anyway.
+mkdir -p $C/etc/modprobe.d
+cat > $C/etc/modprobe.d/diag-audio.conf <<'EOF'
+options snd_hda_core gpu_bind=0
+EOF
+grep -q 'gpu_bind=0' $C/etc/modprobe.d/diag-audio.conf \
+  || { echo "BUILD ABORTED - the sound fix (gpu_bind=0) is missing" >&2; exit 1; }
+echo "sound: snd_hda_core gpu_bind=0 (Intel sound does not wait for the absent i915)"
 
 # ---- misc system config ----
 # The hardware clock holds LOCAL time. Every machine on this bench comes from

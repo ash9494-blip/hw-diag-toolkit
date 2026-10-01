@@ -2,7 +2,7 @@
 # Connect this machine to a wireless network.
 #
 # Separate from the wireless *test* on purpose. Getting online is something you
-# do once when the machine arrives on the bench - so that Get firmware can
+# do once when the machine arrives on the bench - so that Driver check can
 # fetch drivers, and so the wireless test has a link to watch - and it should
 # not have to be repeated inside every test that happens to need the network.
 #
@@ -21,7 +21,7 @@ SCAN_CACHE=$RUN_DIR/wifi_scan
 STATE_FILE=$RUN_DIR/wifi.state      # iface<TAB>ssid, written once connected
 
 # ---------------------------------------------------------------- shared
-# These are used by wifitest.sh and getfirmware.sh too, which is the point:
+# These are used by wifitest.sh and drivercheck.sh too, which is the point:
 # one definition of "are we online", not three that disagree.
 
 wifi_ifaces() {
@@ -47,7 +47,7 @@ wifi_connected_iface() {
   return 1
 }
 
-# Any working route, wired or wireless. Get firmware only cares about this.
+# Any working route, wired or wireless. Driver check only cares about this.
 net_is_up() {
   ip route 2>/dev/null | grep -q '^default' || return 1
   return 0
@@ -147,7 +147,7 @@ status_screen() {
   tui_kv 11 "Gateway"   "${gw:-none}"
   [ -n "$sig" ] && tui_kv 12 "Signal" "$sig dBm"
   tui_kv 13 "Adapter"   "$i"
-  tui_line 15 "Get firmware can now download drivers, and the wireless test" muted
+  tui_line 15 "Driver check can now download firmware, and the wireless test" muted
   tui_line 16 "will watch this link instead of asking you to connect again." muted
   tui_flush
   tui_anykey

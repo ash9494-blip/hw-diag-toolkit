@@ -3,6 +3,81 @@
 Newest first. Each entry says what changed and why; the "why" is usually a
 real machine on Ash's bench.
 
+## 1.15.0 — 2026-10-01
+- **A40-J sound: the cause, and the fix.** Ash's Driver check photo showed
+  the sound controller with no driver: "deferred probe pending:
+  sof-audio-pci-intel-tgl: init of i915 and HDMI codec failed". Intel sound
+  (SOF and HD Audio, 6th gen on) waits for the i915 graphics driver to drive
+  HDMI audio; the image has no i915 on purpose, so it waited forever and no
+  sound card existed. `options snd_hda_core gpu_bind=0` in
+  /etc/modprobe.d/diag-audio.conf tells it not to wait (speakers, headphones,
+  mics work; HDMI audio cannot without i915 anyway). The build asserts it.
+- **Driver check fixes, not just reports.** Choosing a failed device shows
+  what is wrong and offers Fix, which tries in order: faults recognised by
+  their kernel message (the graphics wait above, fixed at runtime), restarting
+  the driver, fetching what it is missing online (firmware from the Ubuntu
+  archive), and for Intel sound the older HD Audio driver
+  (`snd_intel_dspcfg dsp_driver=1`). The device is re-checked after each step;
+  the first that works ends it; every step goes into the report. "Fix
+  everything" does this for all failed devices with one download session.
+  Devices waiting on another driver now say what they wait for
+  (`devices_deferred` / the "deferred probe pending" log line).
+- **SSD controller check** (HDD / SSD menu, read only): names the controller
+  chip (PCI ID + pci.ids), DRAM or DRAM-less and whether it got its host
+  memory buffer, then a minute of 4 KB random reads (QD32 x 4, fio
+  --readonly) while watching temperature, thermal-throttle counters, PCIe link
+  speed/width, AER retries, the NVMe error log, media errors and kernel
+  resets/time-outs; then idle gaps of 1-8 s and the next read timed, to catch
+  controllers slow to wake from APST (the C40-K PM991 class). SATA SSDs get the
+  load plus their CRC / time-out / uncorrectable counters.
+- **Charging test** (Peripherals, Every test): unplug and plug-in detection,
+  one minute of charge rate (W, judged against the pack's capacity below
+  80 %), a 30 s wiggle check counting every connection drop (4 Hz polling plus
+  kernel power events), and each USB-C port that can charge (only counted if
+  a charger was plugged into it). Charge limits are read, never changed.
+- `pcie_gen`/`pcie_link` moved from disktest.sh to lib.sh (shared).
+
+## 1.14.0 — 2026-09-30
+- **Driver check** (home screen tile 10; replaces Get firmware in Peripherals
+  and Every test; part of Full run). Trigger: the A40-J's touchpad and sound
+  both failed with their drivers attached, and Ash needs this to work on many
+  models. Every PCI, USB and I2C device, plus touch devices the firmware lists
+  on I2C, is judged on two questions: is a driver attached, and did it make
+  what it should (sound card, network interface, input device, camera,
+  Bluetooth adapter). States: working / started now / firmware missing / not
+  working / no driver attached / turned off / no Linux driver / not needed /
+  graphics (off on purpose). Devices with no driver get the one on the stick
+  loaded and bound. Per-device details show the driver's own kernel errors.
+  **Download fixes** fetches the firmware packages from the Ubuntu archive
+  (kept on the stick for the next machine), restarts the affected drivers and
+  checks again; **Remove downloaded files** takes exactly those files away.
+  All of it lives in RAM; nothing is written to the machine being tested.
+- Checked before building it: the image already carries every kernel driver
+  Ubuntu ships for this kernel (6,465; linux-modules + -extra), minus the
+  graphics drivers. So the downloadable part is firmware. A device Linux 6.8
+  has no driver for is reported as such (a newer kernel is the only cure).
+- Bundled Wi-Fi firmware now covers MediaTek, Broadcom and Qualcomm ath11k/12k
+  as well as Intel and Realtek - Wi-Fi is how everything else gets downloaded.
+- Sound: `alsa-ucm-conf` added (the A40-J image had no ALSA use-case
+  profiles; SOF cards start with speaker/headphone paths off without them),
+  and the sound test applies the card's profile before playing.
+- The whole boot kernel log is kept (`boot-dmesg.log`), not just firmware lines.
+- `pciutils` added so devices show real names.
+
+## 1.13.1 — 2026-09-30
+- **Machine details tile removed** (home and Every test). It could only
+  override the report, never the machine's own details (invariant 4), which
+  is not what Ash needed from it. DMI capture remains for board swaps.
+- Home order: Show all tests right after Peripherals; System second last,
+  Settings last (same ending in Every test).
+- **Every test tidied.** Trigger: photo from the A40-J - 23 tests in six rows
+  of 4 small squares, names cut short ("Keybo...", "Comm..."), some names
+  large and bold and others small, two-line names spilling out of the box.
+  The sheet now picks the column count that gives the biggest parts where
+  every name fits (6 across at 1920x1080), uses one font size for every
+  part, and anchors the names to the bottom of the part with the icons in
+  line above. The parts list steps its text down when the rows get tight.
+
 ## 1.13.0 — 2026-09-29
 - **Mouse.** A pointer driven by a USB mouse, the touchpad or the
   touchscreen. Left click / tap selects tiles, menu rows and YES / NO;

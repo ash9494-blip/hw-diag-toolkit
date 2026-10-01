@@ -586,6 +586,12 @@ def _icon(name, d, cx, cy, size, col):
         solidbox(4.8, 9.8, 13.5, 14.2, 1.0)
         pl([(20.4, 10.4), (20.4, 13.6)])
 
+    elif name == "charge":                                # charging - the battery with a bolt
+        box(2.5, 7.5, 19, 16.5, 2.4)
+        pl([(20.4, 10.4), (20.4, 13.6)])
+        d.polygon([(X(12.4), Y(8.9)), (X(7.6), Y(12.6)), (X(10.4), Y(12.6)),
+                   (X(9.4), Y(15.1)), (X(14.2), Y(11.4)), (X(11.4), Y(11.4))], fill=col)
+
     # ---------------------------------------------------------------- input
     elif name == "keyboard":
         box(2.5, 6.5, 21.5, 17.5, 2.4)
@@ -1612,9 +1618,52 @@ class Screen:
         return min(([" ".join(ws[:k]), " ".join(ws[k:])] for k in range(1, len(ws))),
                    key=lambda p: max(d.textlength(t, font=font) for t in p))
 
-    @staticmethod
-    def _sheet_cols(n):
-        return min(4 if n > 8 else 5, n)
+    def _sheet_layout(self, labels):
+        """Columns, part size and origin for the parts. The column count is
+        the one giving the biggest parts where every name still fits: a fixed
+        4 put 23 tests in six rows of small squares with names cut short
+        ("Keybo...")."""
+        n = len(labels)
+        d = ImageDraw.Draw(Image.new("L", (1, 1)))
+        s = self.s
+        inner = int(34 * s)
+        top = inner + int(62 * s)
+        lx0 = self.W - inner - int(self.W * 0.27)
+        ax0, ay0 = inner + int(44 * s), top + int(80 * s)
+        ax1, ay1 = lx0 - int(36 * s), self.H - inner - int(20 * s)
+        gx_, gy_ = int(34 * s), int(30 * s)   # gy_ leaves room for the balloons
+        best = None
+        for cols in range(1, min(n, 8) + 1):
+            rows = (n + cols - 1) // cols
+            pw = (ax1 - ax0 - (cols - 1) * gx_) // cols
+            ph = min(pw, (ay1 - ay0 - (rows - 1) * gy_) // rows)
+            pw = min(pw, int(ph * 1.45))
+            if pw <= 0 or ph <= 0:
+                continue
+            f = self._part_font(d, labels, pw - int(16 * s), int(ph * 0.5))
+            fits = all(d.textlength(t, font=f) <= pw - int(16 * s)
+                       for lb in labels for t in self._wrap2(d, lb, f, pw - int(16 * s)))
+            key = (fits, pw * ph)
+            if best is None or key > best[0]:
+                best = (key, cols, rows, pw, ph)
+        _, cols, rows, pw, ph = best
+        gx = ax0 + ((ax1 - ax0) - (cols * pw + (cols - 1) * gx_)) // 2
+        return cols, pw, ph, gx, ay0, gx_, gy_, lx0
+
+    def _sheet_cols(self, entries):
+        return self._sheet_layout([e[0] for e in entries])[0]
+
+    def _part_font(self, d, labels, avail, room):
+        """One size for every part on the sheet - mixed sizes made the long
+        grid look untidy. The largest where every name fits in two lines."""
+        for f in (self.f_part, self.f_body, self.f_small):
+            lh = int(f.size * 1.15)
+            if 2 * lh > room:
+                continue
+            if all(d.textlength(t, font=f) <= avail
+                   for lb in labels for t in self._wrap2(d, lb, f, avail)):
+                return f
+        return self.f_small
 
     def _render_sheet_grid(self, sel, entries):
         img = Image.new("RGB", (self.W, self.H), GROUND)
@@ -1623,43 +1672,34 @@ class Screen:
         s = self.s
         inner = self._sheet_frame(d, c)
         top = self._title_block(img, d, c, inner)
-        lw = int(self.W * 0.27)
-        lx0 = self.W - inner - lw
+        cols, pw, ph, gx, ay0, gapx, gapy, lx0 = self._sheet_layout([e[0] for e in entries])
         d.line([(lx0, top), (lx0, self.H - inner)], fill=c["ink"])
         self._parts_list(d, c, sel, entries, lx0, top, self.W - inner, self.H - inner)
         self._sheet_title(d, c, inner, top)
         d.text((lx0 - int(22 * s), top + int(34 * s)), "FIG. 1", font=self.f_note,
                fill=c["ink2"], anchor="rm")
-        ax0, ay0 = inner + int(44 * s), top + int(80 * s)
-        ax1, ay1 = lx0 - int(36 * s), self.H - inner - int(28 * s)
-        n = len(entries)
-        cols = self._sheet_cols(n)
-        rows = (n + cols - 1) // cols
-        gap = int(34 * s)
-        pw = (ax1 - ax0 - (cols - 1) * gap) // cols
-        ph = min(pw, (ay1 - ay0 - (rows - 1) * gap) // rows)
-        pw = min(pw, int(ph * 1.3))
-        gx = ax0 + ((ax1 - ax0) - (cols * pw + (cols - 1) * gap)) // 2
+        pad = int(8 * s)
+        avail = pw - int(16 * s)
+        f = self._part_font(d, [e[0] for e in entries], avail, int(ph * 0.5))
+        lh = int(f.size * 1.15)
+        # name block anchored to the bottom and sized for the most lines any
+        # name needs, so icons and names line up along each row
+        nl = max(len(self._wrap2(d, e[0], f, avail)) for e in entries)
+        tb_top = ph - pad - nl * lh
+        isz = min(int(ph * 0.34), int((tb_top - pad) * 0.72), int(pw * 0.4))
         self.grid_boxes = []
         for i, e in enumerate(entries):
             label, icon = e[0], e[1]
-            x0 = gx + (i % cols) * (pw + gap)
-            y0 = ay0 + (i // cols) * (ph + gap)
+            x0 = gx + (i % cols) * (pw + gapx)
+            y0 = ay0 + (i // cols) * (ph + gapy)
             self.grid_boxes.append([x0, y0, x0 + pw, y0 + ph])
             on = i == sel
             col = c["sel"] if on else c["ink"]
             d.rectangle([x0, y0, x0 + pw, y0 + ph], outline=col,
                         width=max(3, int(3 * s)) if on else 1)
-            _icon_smooth(icon, img, x0 + pw // 2, y0 + int(ph * 0.40), int(ph * 0.34), col)
-            avail = pw - int(20 * s)
-            # One line, else two, else a size smaller - at 150-200 % text a
-            # single long word ("Peripherals") would otherwise be cut short.
-            for f in (self.f_part, self.f_body, self.f_small):
-                lines = self._wrap2(d, label, f, avail)
-                if all(d.textlength(t, font=f) <= avail for t in lines):
-                    break
-            lh = int(f.size * 1.15)
-            ty = y0 + int(ph * 0.81) - (len(lines) - 1) * lh // 2
+            _icon_smooth(icon, img, x0 + pw // 2, y0 + (tb_top + pad) // 2, isz, col)
+            lines = self._wrap2(d, label, f, avail)
+            ty = y0 + tb_top + (nl - len(lines)) * lh // 2 + lh // 2
             for k, ln in enumerate(lines):
                 d.text((x0 + pw // 2, ty + k * lh), self._clip(d, ln, f, avail),
                        font=f, fill=col, anchor="mm")
@@ -1686,6 +1726,9 @@ class Screen:
         d.text((x1 - int(18 * s), y + rh // 2), "RESULT", font=self.f_note, fill=c["ink2"], anchor="rm")
         y += rh
         d.line([(x0, y), (x1, y)], fill=c["ink"])
+        # 22 rows at 150 % text overlapped: step the item text down to fit
+        fi = next((f for f in (self.f_body, self.f_small, self.f_note) if f.size * 1.1 <= rh),
+                  self.f_note)
         for i, e in enumerate(entries):
             on = i == sel
             res = e[2] if len(e) > 2 else ""
@@ -1697,8 +1740,8 @@ class Screen:
                    fill=c["sel"] if on else c["ink2"], anchor="lm")
             resw = d.textlength(res or "-", font=self.f_noteb)
             d.text((x0 + int(70 * s), cy),
-                   self._clip(d, e[0], self.f_body, x1 - x0 - int(100 * s) - resw),
-                   font=self.f_body, fill=c["ink"], anchor="lm")
+                   self._clip(d, e[0], fi, x1 - x0 - int(100 * s) - resw),
+                   font=fi, fill=c["ink"], anchor="lm")
             if res:
                 col = PASS_ if res.startswith("PASS") else (FAIL_ if res.startswith("FAIL") else c["ink2"])
                 d.text((x1 - int(18 * s), cy), res, font=self.f_noteb, fill=col, anchor="rm")
@@ -1922,7 +1965,7 @@ class Screen:
         redraw = True
         while True:
             # arrow keys move by the columns actually on screen
-            cols = self._sheet_cols(n) if LOOK == "manual" else self._grid_geometry(n)[0]
+            cols = self._sheet_cols(entries) if LOOK == "manual" else self._grid_geometry(n)[0]
             if redraw:
                 self.render_grid(sel, entries)
             redraw = True

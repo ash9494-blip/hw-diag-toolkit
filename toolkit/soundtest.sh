@@ -42,8 +42,17 @@ card_list() {
 
 unmute_all() {
   have amixer || return
-  local c
+  local c d
   for c in $(awk '/^ *[0-9]+ \[/{print $1}' /proc/asound/cards 2>/dev/null); do
+    # The DSP cards on 11th-gen and newer laptops (SOF) start with their
+    # speaker and headphone paths off; the card's use-case profile is what
+    # routes them. Cards without a profile just ignore this.
+    if have alsaucm; then
+      alsaucm -c "hw:$c" set _verb HiFi >/dev/null 2>&1
+      for d in Speaker Headphones; do
+        alsaucm -c "hw:$c" set _verb HiFi set _enadev "$d" >/dev/null 2>&1
+      done
+    fi
     amixer -c "$c" scontrols 2>/dev/null | sed 's/^.*'"'"'\(.*\)'"'"'.*$/\1/' | while read -r ctl; do
       case "$ctl" in
         Master|Speaker|Headphone|PCM|Front|Capture|Mic|"Internal Mic"|Digital)
@@ -112,6 +121,8 @@ if ! load_sound_modules; then
   tui_badge 6 UNKNOWN "no sound card found"
   tui_line 9  "The kernel did not register an audio device on this machine."
   tui_line 10 "On a laptop that usually means the codec is not responding." muted
+  tui_line 12 "Driver check (home screen) shows which driver took the sound" ""
+  tui_line 13 "controller, what it complained about, and fetches missing firmware." muted
   tui_flush; tui_anykey
   exit 0
 fi

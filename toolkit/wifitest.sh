@@ -538,7 +538,7 @@ main() {
       tui_badge 6 UNKNOWN "card found, but no driver"
       tui_line 9  "$chip" ""
       tui_line 11 "The card is on the bus but the kernel has not bound a driver," muted
-      tui_line 12 "which usually means its firmware is missing. Try Get firmware." muted
+      tui_line 12 "which usually means its firmware is missing. Try Driver check." muted
     else
       rsilent "RESULT: NOT TESTED -- no wireless card found on this machine"
       set_kv WIFI_RESULT "NOT TESTED (no card)"

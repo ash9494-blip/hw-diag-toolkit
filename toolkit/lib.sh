@@ -16,7 +16,7 @@
 # needs silencing here.
 exec 8>&-
 
-DIAG_VERSION="1.13.0"
+DIAG_VERSION="1.15.0"
 RUN_DIR=/run/diag
 REPORT_TXT="$RUN_DIR/report.txt"
 SUMMARY_KV="$RUN_DIR/summary.kv"
@@ -237,6 +237,46 @@ disk_temp_c() {
   v=$(smartctl -A "/dev/$dev" 2>/dev/null \
       | awk '/Temperature_Celsius|Current Drive Temperature|^Temperature:/ {for(i=1;i<=NF;i++) if ($i+0>0 && $i+0<120) {print $i+0; exit}}' | head -1)
   case "$v" in ''|*[!0-9]*) echo -1 ;; *) echo "$v" ;; esac
+}
+
+pcie_gen() {
+  case "${1%% *}" in
+    2.5) echo "1.0" ;; 5.0|5) echo "2.0" ;; 8.0|8) echo "3.0" ;;
+    16.0|16) echo "4.0" ;; 32.0|32) echo "5.0" ;; 64.0|64) echo "6.0" ;;
+    *) echo "" ;;
+  esac
+}
+
+# What an NVMe drive's link is doing now, against what the drive and the
+# laptop's slot can each do. Sets PCIE_NOW ("PCIe 4.0 x4"), PCIE_NOTE (one
+# line of explanation, empty when all is as it should be) and PCIE_TONE.
+pcie_link() {   # bdf
+  local d=/sys/bus/pci/devices/$1 up cs cw ms mw ss sw g gm gs
+  PCIE_NOW=""; PCIE_NOTE=""; PCIE_TONE=ok; PCIE_DRIVE=""; PCIE_SLOT=""
+  cs=$(cat "$d/current_link_speed" 2>/dev/null); cw=$(cat "$d/current_link_width" 2>/dev/null)
+  ms=$(cat "$d/max_link_speed" 2>/dev/null);     mw=$(cat "$d/max_link_width" 2>/dev/null)
+  up=$(readlink -f "$d/.." 2>/dev/null)
+  ss=$(cat "$up/max_link_speed" 2>/dev/null);    sw=$(cat "$up/max_link_width" 2>/dev/null)
+  g=$(pcie_gen "$cs"); gm=$(pcie_gen "$ms"); gs=$(pcie_gen "$ss")
+  [ -n "$g" ] || return 1
+  PCIE_NOW="PCIe $g x${cw:-?}  (${cs%% PCIe})"
+  [ -n "$gm" ] && PCIE_DRIVE="PCIe $gm x${mw:-?}"
+  [ -n "$gs" ] && PCIE_SLOT="PCIe $gs x${sw:-?}"
+
+  # The link trains to the lower of the two ends. Below that is a fault.
+  local best=$gm bestw=${mw:-0}
+  if [ -n "$gs" ] && awk -v a="$gs" -v b="$gm" 'BEGIN{exit !(b=="" || a<b)}'; then best=$gs; fi
+  [ -n "$sw" ] && [ "${sw:-0}" -lt "$bestw" ] 2>/dev/null && bestw=$sw
+  if [ -n "$best" ] && awk -v c="$g" -v b="$best" 'BEGIN{exit !(c<b)}'; then
+    PCIE_TONE=warn
+    PCIE_NOTE="running below the PCIe $best both ends support - reseat the drive, check the M.2 contacts"
+  elif [ "$bestw" -gt 0 ] 2>/dev/null && [ "${cw:-0}" -lt "$bestw" ] 2>/dev/null; then
+    PCIE_TONE=warn
+    PCIE_NOTE="only x$cw of x$bestw lanes trained - reseat the drive, check the M.2 contacts"
+  elif [ -n "$gm" ] && [ -n "$gs" ] && awk -v s="$gs" -v m="$gm" 'BEGIN{exit !(s<m)}'; then
+    PCIE_NOTE="drive can do PCIe $gm; this laptop's slot tops out at PCIe $gs - normal"
+  fi
+  return 0
 }
 
 # Kernel-log lines newer than a mark, without clearing the ring buffer.
