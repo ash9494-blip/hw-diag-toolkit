@@ -1,0 +1,8 @@
+# The toolkit runs on Linux. With core.autocrlf=true a Windows checkout would
+# rewrite these with CRLF, and bash then fails on the stray "\r".
+*.sh  text eol=lf
+*.py  text eol=lf
+*.md  text eol=lf
+.gitignore     text eol=lf
+.gitattributes text eol=lf
+*.png binary
