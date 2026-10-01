@@ -5,7 +5,7 @@ Bootable USB/ISO for bench-testing laptops at Data Dynamics (Johor). Owner: Ash
 minimal Ubuntu live system straight into a full-screen tile menu of hardware
 tests, and writes a per-machine report to the USB stick.
 
-**Current version: 1.15.0** (`toolkit/lib.sh` → `DIAG_VERSION`).
+**Current version: 1.16.0** (`toolkit/lib.sh` → `DIAG_VERSION`).
 Last delivered ISO: 1.15.0, SHA256 `b64bea32446eb13a44eafe23b1ae2aee8c634e397086a012d9c3104a696fb123`.
 Version history and the reasoning behind past changes: `docs/HISTORY.md`.
 
@@ -27,6 +27,8 @@ toolkit/            everything that ends up in /opt/diag on the image
                     per device, firmware download + removal (sourced)
   drivercheck.sh    Driver check screen + per-device Fix; --quiet = scan + report
   ctrltest.sh       SSD controller check (HDD/SSD menu), read only
+  ssdanim.py        "How these tests work" animations for the HDD/SSD tests
+                    (imported by ui.py on demand; --check / --text / --frames)
   chargetest.sh     Charging test (Peripherals); writes $RUN_DIR/charge.step
   ui.py             Pillow framebuffer renderer (/dev/fb0), all screens + the
                     interactive tests (keyboard, pointer, touchscreen, camera)
@@ -118,6 +120,9 @@ radio, touchpad or battery. Say so when something is only VM-verified.
 - Comments explain *why* (usually the bug that forced it). Keep that style.
 - New tests: add to `run_test` in menu.sh and to both menu layouts (compact
   grid / peripherals submenu, and the expanded "Every test" list).
+- A drive test's behaviour is also described in `ssdanim.py` (captions and
+  the robots' moves). Change one, change the other; run
+  `python3 toolkit/ssdanim.py --check` (needs Pillow) before building.
 - Target machines run mawk, not gawk: no `strtonum`, `and()`, `gensub`.
 - Ioctl numbers/struct offsets: compile a C probe against `/usr/include/linux`
   headers — hand calculations were wrong several times.

@@ -138,14 +138,14 @@ install_wifi_firmware
 
 # ---- toolkit ----
 mkdir -p $C/opt/diag
-cp $B/toolkit/*.sh $B/toolkit/ui.py $C/opt/diag/
+cp $B/toolkit/*.sh $B/toolkit/*.py $C/opt/diag/
 # The icon artwork is data the renderer loads at draw time, so it has to travel
 # with the scripts. Missing it does not crash anything - _icon_smooth falls back
 # to drawing - which is exactly why its absence would go unnoticed until the
 # tiles looked wrong on a real machine.
 rm -rf $C/opt/diag/icons
 cp -a $B/toolkit/icons $C/opt/diag/icons
-chmod +x $C/opt/diag/*.sh $C/opt/diag/ui.py
+chmod +x $C/opt/diag/*.sh $C/opt/diag/*.py
 n=$(ls $C/opt/diag/icons/*.png 2>/dev/null | wc -l)
 [ "$n" -ge 19 ] || { echo "BUILD ABORTED - only $n icon files reached the image" >&2; exit 1; }
 echo "icons installed: $n"
@@ -176,6 +176,19 @@ smoke_test_ui() {
   rm -rf "$d"
 }
 smoke_test_ui
+
+# The drive-test animations (HDD / SSD -> How these tests work) are a separate
+# module that ui.py only imports when they are opened, so the smoke test above
+# never touches them. Render every step of every one, in every theme, here -
+# a broken animation stops the build instead of a demonstration at the bench.
+[ -f $C/opt/diag/ssdanim.py ] \
+  || { echo "BUILD ABORTED - ssdanim.py did not reach the image" >&2; exit 1; }
+if ! chroot $C env DIAG_RUN=/tmp/animcheck python3 /opt/diag/ssdanim.py --check > /tmp/animcheck.out 2>&1; then
+  echo "BUILD ABORTED - the drive-test animations failed to render:" >&2
+  tail -12 /tmp/animcheck.out >&2
+  exit 1
+fi
+cat /tmp/animcheck.out
 
 # ---- autologin on tty1 and serial ----
 mkdir -p $C/etc/systemd/system/getty@tty1.service.d

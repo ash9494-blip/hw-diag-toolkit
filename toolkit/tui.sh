@@ -165,3 +165,7 @@ tui_pixtest() { _ask pixtest; PIX_SUMMARY=$UI_ANS; }
 # Live camera preview inside the renderer. Returns pipe-separated:
 # card name, frames grabbed, fps, mean brightness, dark-frame count.
 tui_camtest() { _ask camtest; CAM_SUMMARY=$UI_ANS; }
+
+# The animated "how it works" for one drive test (ssdanim.py: smart ctrl bench
+# install surface selftest). It moves on through the others; Esc comes back.
+tui_anim() { _ask anim "$1"; }

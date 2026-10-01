@@ -28,7 +28,42 @@ FPS = 15                  # target; a slow machine drops frames, the clock does 
 
 # ---------------------------------------------------------------- the scripts
 # (seconds, caption). The visuals for each step are in the scene's draw().
-SCENES = [
+SCENES = [  # in the order of the HDD / SSD menu
+    ("smart", "SMART health", "smartctl", [
+        (6, "SMART health asks the controller for its own records - counters it has kept since "
+            "the factory. Nothing is tested; it is read out (NVMe: Get Log Page)."),
+        (7, "Identify: model, firmware revision, and the controller chip itself from its PCI ID. "
+            "A fault often belongs to a controller + firmware pair, not to the brand on the label."),
+        (8, "PCIe link: read while the drive is busy, because drives drop to a slow link at idle "
+            "to save power. Full speed on all lanes is right; fewer lanes or a lower generation "
+            "means reseat and clean the M.2 contacts."),
+        (8, "Wear: each flash cell survives a few thousand write/erase cycles. Written in its life "
+            "/ capacity = full-drive writes, the minimum cycles each cell has done. "
+            "Percentage Used is the drive's own wear estimate."),
+        (7, "Spare blocks stand in for cells that wear out. Available Spare falling towards its "
+            "threshold means the drive is running out of replacements: replace it."),
+        (6, "Media errors, power-on hours, unsafe shutdowns and temperature come from the same "
+            "log. The overall verdict - PASSED or FAILED - is the drive's own."),
+    ]),
+    ("ctrl", "Controller check", "fio", [
+        (7, "The controller check first names the chip that runs the drive (from its PCI ID) and "
+            "its firmware. Then: does it have DRAM of its own, or borrow laptop RAM (HMB) for "
+            "its map - and was it given any?"),
+        (5, "Before the load, the drive's own counters are written down: temperature, "
+            "heat-throttle events, the error log, media errors and PCIe link retries."),
+        (9, "Then one minute of 4 KB random reads, 128 at once (4 jobs x queue 32). Small random "
+            "reads work the controller hardest: a map lookup and a trip to a chip for every one. "
+            "Read only - nothing is written."),
+        (8, "Every 2 s the toolkit checks the temperature against the drive's own warning limit, "
+            "the PCIe link speed and width, and the kernel log. A controller that hangs gets "
+            "reset by Linux: FAIL."),
+        (11, "Then the drive is left idle for 1, 2, 4 and 8 s. Idle, the controller powers down "
+             "(APST) and the robots sleep. The next read is timed: a controller slow to wake is "
+             "the one that vanishes or freezes the laptop."),
+        (7, "Finally the counters are compared. New resets, I/O errors, media errors or "
+            "uncorrectable PCIe errors = FAIL. Heat throttling, link retries, a slow wake-up or "
+            "a freeze over 0.5 s = WARN."),
+    ]),
     ("bench", "Benchmark", "fio", [
         (7, "fio runs the four CrystalDiskMark profiles, 5 s each, with direct I/O: the laptop's "
             "RAM cache is bypassed, so only the drive is measured. Each robot is one flash "
@@ -88,24 +123,11 @@ SCENES = [
         (6, "Your data is not changed. The drive keeps answering normal requests while it "
             "tests - just a little slower."),
     ]),
-    ("smart", "SMART & controller", "smartctl", [
-        (6, "SMART health asks the controller for its own records - counters it has kept since "
-            "the factory. Nothing is tested; it is read out (NVMe: Get Log Page)."),
-        (7, "Identify: model, firmware revision, and the controller chip itself from its PCI ID. "
-            "A fault often belongs to a controller + firmware pair, not to the brand on the label."),
-        (8, "PCIe link: read while the drive is busy, because drives drop to a slow link at idle "
-            "to save power. Full speed on all lanes is right; fewer lanes or a lower generation "
-            "means reseat and clean the M.2 contacts."),
-        (8, "Wear: each flash cell survives a few thousand write/erase cycles. Written in its life "
-            "/ capacity = full-drive writes, the minimum cycles each cell has done. "
-            "Percentage Used is the drive's own wear estimate."),
-        (7, "Spare blocks stand in for cells that wear out. Available Spare falling towards its "
-            "threshold means the drive is running out of replacements: replace it."),
-        (6, "Media errors, power-on hours, unsafe shutdowns and temperature come from the same "
-            "log. The overall verdict - PASSED or FAILED - is the drive's own."),
-    ]),
 ]
 NAMES = [s[0] for s in SCENES]
+# for the tabs: six full titles do not fit across a 1024 px screen
+SHORT = {"smart": "SMART", "ctrl": "Controller", "bench": "Benchmark",
+         "install": "Install sim.", "surface": "Surface scan", "selftest": "Self-test"}
 
 
 # ---------------------------------------------------------------- small maths
@@ -367,8 +389,8 @@ class Stage:
         for i, sc in enumerate(SCENES):
             on = i == scene_i
             f = scr.f_bodyb if on else scr.f_small
-            tw = d.textlength(sc[1], font=f)
-            self.text(d, (x, ty + int(12 * s)), sc[1], f, P.INK if on else P.MUTED, "lm")
+            tw = d.textlength(SHORT[sc[0]], font=f)
+            self.text(d, (x, ty + int(12 * s)), SHORT[sc[0]], f, P.INK if on else P.MUTED, "lm")
             if on:
                 d.rectangle([x, ty + int(28 * s), x + tw, ty + int(31 * s)], fill=P.ACCENT)
             x += tw + int(30 * s)
@@ -423,6 +445,10 @@ class Stage:
             self.rr(d, box, fill=P.CHIP, outline=P.MUTED)
             self.text(d, (box[0] + int(7 * s), box[1] + int(3 * s)),
                       "NAND  ch %d" % p, scr.f_tiny, P.MUTED)
+
+        # what the robots are, on every scene
+        self.text(d, (self.strip_box[2], self.strip_box[1]), "robot = one flash channel of the controller",
+                  scr.f_tiny, P.MUTED, "ra")
 
         # the panel frame
         self.rr(d, self.panel, fill=P.PAPER, outline=P.LINE, width=max(1, int(2 * s)))
@@ -622,7 +648,7 @@ class Stage:
             d.line([x, hy1, x, yb - h * 0.52], fill=body, width=lw)
             self.rr(d, (x - w * 0.42, hy0, x + w * 0.42, hy1), fill=body, r=max(2, int(h * 0.08)))
             ey = (hy0 + hy1) / 2
-            blink = hrand(int(t * 3), p) < 0.08
+            blink = hrand(int(t * 3), p) < 0.08 or mood == "sleep"
             for ex in (x - w * 0.17, x + w * 0.17):
                 if blink:
                     d.line([ex - h * 0.05, ey, ex + h * 0.05, ey], fill=P.PASS_, width=lw)
@@ -644,6 +670,10 @@ class Stage:
                 d.line([hx - bs, hy - bs * 0.3, hx + bs, hy - bs * 0.3], fill=P.INK)   # tape
             else:
                 d.line([sx, sy, sx + w * 0.12, yb - h * 0.24], fill=body, width=lw)
+            if mood == "sleep":
+                z = (t * 0.8 + p * 0.3) % 1.0
+                self.text(d, (x + w * 0.4 + z * w * 0.5, hy0 - z * h * 0.45), "z",
+                          self.scr.f_bodyb, mix(P.MUTED, P.PAPER, z * 0.5), "ld")
             if mood == "shrug":
                 self.text(d, (x, hy0 - h * 0.2), "?", self.scr.f_noteb, P.MUTED, "md")
         self.bots = []
@@ -1122,7 +1152,7 @@ def scene_surface(st, d, step, u, t):
     pos = surface_pos(step, u)
     unmapped_now = pos >= UNMAPPED and step < 4
     bad_found = pos >= BAD_AT
-    sec = SCENES[2][3][step][0]
+    sec = SCENES[NAMES.index("surface")][3][step][0]
 
     lit = {k: P.DATA for k in st.cells if used_drive(*k)}
     lit[BAD_CELL] = P.DATA
@@ -1479,11 +1509,200 @@ def scene_smart(st, d, step, u, t):
             "the controller's own log - no user data is read", scr.f_tiny, P.MUTED, "mm")
 
 
-DRAW = {"bench": scene_bench, "install": scene_install, "surface": scene_surface,
+WAKE_GAPS = (1, 2, 4, 8)            # seconds idle before each timed read, as in ctrltest.sh
+WAKE_MS = (4, 6, 9, 11)             # example answers
+
+
+def scene_ctrl(st, d, step, u, t):
+    P, s, scr = st.P, st.s, st.scr
+    lt = st.lt
+    lit = {k: P.DATA for k in st.cells if used_drive(*k)}
+    x0p, y0p, x1p, y1p = st.panel_title(d, ["THE CHIP", "BEFORE", "UNDER LOAD", "UNDER LOAD",
+                                            "WAKING UP", "BEFORE -> AFTER"][step])
+    rh = int(30 * s)
+
+    # This example is a DRAM-less controller, the kind ctrltest.sh was written
+    # for: no memory chip of its own, its map kept in borrowed laptop RAM.
+    dr = st.dram
+    st.rr(d, dr, fill=P.BOARD, outline=P.LINE)
+    st.text(d, ((dr[0] + dr[2]) // 2, (dr[1] + dr[3]) // 2), "no DRAM chip", scr.f_tiny, P.MUTED, "mm")
+    r = st.h_ram
+    hm = (r[0] + int(4 * s), r[3] - int(24 * s), r[2] - int(4 * s), r[3] - int(4 * s))
+    st.rr(d, hm, fill=mix(P.PAPER, P.WARN_, 0.35))
+    st.text(d, ((hm[0] + hm[2]) // 2, (hm[1] + hm[3]) // 2), "HMB: its map", scr.f_tiny, P.INK, "mm")
+    if step == 0 and u > 0.45:
+        # the borrowed memory: a dotted line from the chip back to laptop RAM
+        a = (st.ctrl[0], st.c_map[1] + (st.c_map[3] - st.c_map[1]) // 2)
+        b = (hm[2], (hm[1] + hm[3]) // 2)
+        pts = [a, (a[0] - int(12 * s), a[1]), (a[0] - int(12 * s), b[1]), b]
+        for i in range(len(pts) - 1):
+            (xa, ya), (xb, yb) = pts[i], pts[i + 1]
+            n = max(1, int(math.hypot(xb - xa, yb - ya) / (8 * s)))
+            for k in range(0, n, 2):
+                d.line([lerp(xa, xb, k / n), lerp(ya, yb, k / n),
+                        lerp(xa, xb, (k + 1) / n), lerp(ya, yb, (k + 1) / n)],
+                       fill=P.WARN_, width=max(1, int(2 * s)))
+        st.glow(d, hm, P.WARN_)
+
+    sleeping = False
+    if step == 0:
+        st.queue(d, 1, 0)
+        if u < 0.25:
+            st.lane_packet(d, u / 0.25, 1, True, False, label="Identify")
+        elif u < 0.45:
+            st.lane_packet(d, seg(u, 0.25, 0.45), 1, False, True, label="4 KiB")
+        st.glow(d, st.ctrl)
+        st.callout(d, "the chip, named by its PCI ID", P.INK)
+        rows = [("Controller chip", "[vendor:device]"), ("Firmware", "rev. 1.0"),
+                ("Memory", "no DRAM"), ("Borrows (HMB)", "64 MB - given")]
+        for i, (k, v) in enumerate(rows):
+            if u > 0.3 + i * 0.12:
+                st.kv(d, x0p, x1p, y0p + i * rh, k, v,
+                      P.WARN_ if i >= 2 else None, f=scr.f_noteb)
+        if u > 0.85:
+            st.text(d, (x0p, y0p + 4 * rh + int(10 * s)), "No HMB given = WARN: slow,", scr.f_small, P.WARN_)
+            st.text(d, (x0p, y0p + 5 * rh + int(6 * s)), "and the type most likely to stall", scr.f_small, P.WARN_)
+    elif step == 1:
+        st.queue(d, 1, 0)
+        if u < 0.3:
+            st.lane_packet(d, u / 0.3, 1, True, False, label="SMART log")
+        elif u < 0.6:
+            st.glow(d, st.c_ecc)
+            st.lane_packet(d, seg(u, 0.3, 0.6), 1, False, True, label="512 bytes")
+        rows = [("Temperature", "41 C"), ("Throttle events", "0"), ("Error log", "3"),
+                ("Media errors", "0"), ("PCIe retries (AER)", "0")]
+        for i, (k, v) in enumerate(rows):
+            if u > 0.55 + i * 0.07:
+                st.kv(d, x0p, x1p, y0p + i * rh, k, v, f=scr.f_noteb)
+        st.callout(d, "written down now, compared at the end", P.INK)
+    elif step in (2, 3):
+        # 4 jobs x queue 32 = 128 small random reads in flight: every robot
+        # flat out, and the map consulted for every single one
+        st.queue(d, 32, 32 if int(t * 7) % 5 else 30)
+        st.text(d, (st.c_queue[2] - int(4 * s), st.c_queue[1] + int(3 * s)), "x4 jobs",
+                scr.f_tiny, P.ACCENT, "ra")
+        if int(t * 8) % 2:
+            st.glow(d, st.c_map)
+        per = 0.5
+        for p in range(PKGS):
+            f = lt / per + p * 0.23
+            key = rnd_cell(p, int(f), 7)
+            done, at = st.job(p, [key], [None, P.ACCENT], f % 1.0)
+            if at:
+                lit[key] = P.ACCENT
+            st.trace_lit(d, p, 0.8)
+            if f % 1.0 > 0.8:
+                st.trace_pulse(d, p, 1 - seg(f % 1.0, 0.8, 1.0))
+        for i in range(10):
+            st.lane_packet(d, ((t * 1.9) + i / 10) % 1, i, i % 2 == 0, i % 2 == 1)
+        st.lit_lanes(d, 1.0)
+        secs = int(lerp(0, 30, u)) if step == 2 else int(lerp(30, 60, u))
+        temp = int(lerp(41, 55, u)) if step == 2 else int(lerp(55, 63, u))
+        st.kv(d, x0p, x1p, y0p, "Time", "%d of 60 s" % secs)
+        st.kv(d, x0p, x1p, y0p + rh, "Reads a second", thousands(238000 + 9000 * hrand(int(t * 2))),
+              f=scr.f_noteb)
+        st.kv(d, x0p, x1p, y0p + 2 * rh, "Temperature", "%d C (warns 80)" % temp,
+              P.WARN_ if temp >= 80 else P.PASS_, f=scr.f_noteb)
+        st.kv(d, x0p, x1p, y0p + 3 * rh, "PCIe link", "3.0 x4", P.PASS_, f=scr.f_noteb)
+        st.kv(d, x0p, x1p, y0p + 4 * rh, "Kernel resets", "0", P.PASS_, f=scr.f_noteb)
+        if step == 3:
+            # the checks, every 2 s: each item lights as it is looked at
+            k = int(lt / 0.5) % 4
+            yy = y0p + (1 + k) * rh + int(rh * 0.45)
+            d.line([x0p - int(8 * s), yy - int(10 * s), x0p - int(8 * s), yy + int(10 * s)],
+                   fill=P.ACCENT, width=max(2, int(3 * s)))
+            st.text(d, (x0p, y0p + 5 * rh + int(8 * s)), "A hang = Linux resets the controller", scr.f_small, P.FAIL_)
+            st.text(d, (x0p, y0p + 6 * rh + int(4 * s)), "= FAIL. The link dropping = WARN.", scr.f_small, P.FAIL_)
+            st.callout(d, "every 2 s: heat, link, kernel log", P.INK)
+        else:
+            st.callout(d, "128 small reads at once - read only", P.INK)
+    elif step == 4:
+        # idle -> deep power saving -> one timed read. The four gaps are
+        # compressed to fit, in the same order and proportion as the real ones.
+        st.queue(d, 1, 0)
+        sec = SCENES[NAMES.index("ctrl")][3][4][0]
+        spans = [0.6 + 0.25 * g for g in WAKE_GAPS]
+        k = sum(spans) / sec
+        acc, cur, v = 0.0, len(WAKE_GAPS) - 1, 1.0
+        for i, sp in enumerate(spans):
+            if lt < (acc + sp) / k:
+                cur, v = i, (lt * k - acc) / sp
+                break
+            acc += sp
+        idle_part = (0.25 * WAKE_GAPS[cur]) / spans[cur]
+        asleep = v < idle_part
+        if asleep:
+            sleeping = True
+            st.lit_lanes(d, 0.0)
+            for p in range(PKGS):
+                st.idle(p, "sleep" if v > idle_part * 0.3 else "")
+            st.callout(d, "idle %d s: powering down (APST)" % WAKE_GAPS[cur], P.MUTED)
+        else:
+            w = seg(v, idle_part, 1.0)
+            p = cur % PKGS
+            key = rnd_cell(p, cur, 3)
+            if w < 0.3:
+                st.lane_packet(d, w / 0.3, 1, True, False, label="one 4 KB read")
+                for q in range(PKGS):
+                    st.idle(q, "sleep" if w < 0.2 else "")
+            else:
+                done, at = st.job(p, [key], [None, P.ACCENT], seg(w, 0.3, 0.95))
+                if at:
+                    lit[key] = P.ACCENT
+                for q in range(PKGS):
+                    if q != p:
+                        st.idle(q)
+            if v > 0.9:
+                st.callout(d, "woke and answered in %d ms" % WAKE_MS[cur], P.PASS_)
+            else:
+                st.callout(d, "waking up... (timing it)", P.ACCENT)
+        for i in range(len(WAKE_GAPS)):
+            if i < cur or (i == cur and not asleep and v > 0.9):
+                st.kv(d, x0p, x1p, y0p + i * rh, "after %d s idle" % WAKE_GAPS[i], "%d ms" % WAKE_MS[i],
+                      P.PASS_, f=scr.f_noteb)
+            elif i == cur:
+                st.kv(d, x0p, x1p, y0p + i * rh, "after %d s idle" % WAKE_GAPS[i], "...", P.MUTED,
+                      f=scr.f_noteb)
+        st.text(d, (x0p, y0p + 4 * rh + int(10 * s)), "Slow to wake (over 3x what it", scr.f_small, P.WARN_)
+        st.text(d, (x0p, y0p + 5 * rh + int(6 * s)), "promises) = WARN: the drive that", scr.f_small, P.WARN_)
+        st.text(d, (x0p, y0p + 6 * rh + int(2 * s)), "vanishes or freezes the laptop.", scr.f_small, P.WARN_)
+    else:
+        st.queue(d, 1, 0)
+        rows = [("Kernel resets", "0"), ("I/O errors", "0"), ("Media errors", "0 -> 0"),
+                ("PCIe errors (AER)", "0 -> 0"), ("Throttle events", "0 -> 0"),
+                ("Worst freeze", "38 ms"), ("Slowest wake", "11 ms")]
+        for i, (k, v) in enumerate(rows):
+            if u * 8 > i:
+                st.kv(d, x0p, x1p, y0p + i * int(28 * s), k, v, P.PASS_, f=scr.f_noteb)
+        if u > 0.8:
+            st.badge(d, x0p, y0p + 7 * int(28 * s) + int(8 * s), "PASS", P.PASS_)
+        for p in range(PKGS):
+            st.idle(p, "happy" if u > 0.8 else "")
+
+    if sleeping:
+        for k in lit:
+            lit[k] = mix(lit[k], P.PAPER, 0.5) if lit[k] else None
+    st.draw_cells(d, lambda p, r_, c: lit.get((p, r_, c)))
+
+    # strip: the kernel log, watched for resets while the load runs
+    st.addr_strip(d, "", "", "Kernel log - watched for controller resets and time-outs")
+    x0, by0, x1, by1 = st._sb
+    if step in (2, 3):
+        el = (u if step == 2 else 1.0 + u) / 2.0
+        st.strip_fill(d, 0, el, P.OKT)
+        st.strip_cursor(d, el, P.PASS_)
+        st.text(d, ((x0 + x1) // 2, (by0 + by1) // 2), "no resets, no time-outs", scr.f_tiny, P.INK, "mm")
+    elif step >= 4:
+        st.strip_fill(d, 0, 1.0, P.OKT)
+        st.text(d, ((x0 + x1) // 2, (by0 + by1) // 2), "clean for the whole minute", scr.f_tiny, P.INK, "mm")
+
+
+DRAW = {"ctrl": scene_ctrl, "bench": scene_bench, "install": scene_install, "surface": scene_surface,
         "selftest": scene_selftest, "smart": scene_smart}
 LABELS = {"bench": ("queue", "FTL map", "ECC"), "install": ("queue", "FTL map", "ECC"),
           "surface": ("queue", "FTL map", "ECC"), "selftest": ("queue", "self-test", "ECC"),
-          "smart": ("queue", "identify", "SMART log")}
+          "smart": ("queue", "identify", "SMART log"),
+          "ctrl": ("queue", "FTL map", "SMART log")}
 
 
 def locate(beats, t):

@@ -3,6 +3,33 @@
 Newest first. Each entry says what changed and why; the "why" is usually a
 real machine on Ash's bench.
 
+## 1.16.0 — 2026-10-01
+- **How these tests work** (HDD / SSD menu, item 8, after the tests so their
+  numbers do not move). Ash asked to see what each drive test looks like from
+  inside the SSD. Six animations, one per test in menu order - SMART health,
+  Controller check, Benchmark, Install simulation, Surface read scan, Drive
+  self-test - drawn by the renderer itself (`ssdanim.py`, imported only when
+  opened). One robot per flash channel carries data blocks between the
+  controller and its chip: all four fetch together for SEQ1M Q8, one at a time
+  for Q1; they fill the SLC cache and then have to shuttle it into TLC while
+  new data arrives (the install-simulation cliff); the surface scan sends them
+  to scattered shelves and one comes back broken; in the self-test they check
+  every shelf with the bus quiet; in the controller check they sprint under
+  128 queued reads, then fall asleep in APST and the wake-up is timed.
+  Captions follow the scripts (fio profiles, 256 MB stamped chunks,
+  badblocks, NVMe self-test segments, ctrltest.sh's load / watch / wake /
+  verdict). Every figure is labelled "illustration - not this drive".
+  Left/Right switch animation, Space pauses, Enter skips a step, Esc returns.
+  The text interface shows the captions instead (`ssdanim.py --text`).
+- Rendered labels are cached as masks: FreeType was three quarters of every
+  frame. About 11 ms a frame at 1280x800 and 17 ms at 1920x1080 on the build
+  host, against a 15 fps target; the animation keeps time by the clock, so a
+  slower machine drops frames rather than playing slow.
+- The build copies every toolkit `*.py` and renders every step of every
+  animation in all three themes (`ssdanim.py --check`); a failure aborts it.
+- Only checked in the renderer with a file-backed framebuffer, not yet booted
+  in QEMU or seen on real hardware.
+
 ## 1.15.0 — 2026-10-01
 - **A40-J sound: the cause, and the fix.** Ash's Driver check photo showed
   the sound controller with no driver: "deferred probe pending:

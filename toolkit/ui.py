@@ -3335,7 +3335,7 @@ def main():
                 # screen still shows the previous frame.
                 if dirty and op in ("waitkey", "anykey", "menu", "confirm",
                                     "input", "msg", "pager", "kbtest", "gridmenu", "ptrtest", "camtest", "tstest",
-                                    "pixtest"):
+                                    "pixtest", "anim"):
                     scr.render(); dirty = False
                 try:
                     if op == "frame":
@@ -3433,6 +3433,13 @@ def main():
                         reply(fullscreen(touchscreen_test, scr, kb)); dirty = True
                     elif op == "pixtest":
                         reply(fullscreen(pixel_test, scr, kb)); dirty = True
+                    elif op == "anim":
+                        # The "how it works" animations for the drive tests.
+                        # Imported on first use, so a fault in them can only
+                        # ever cost that screen, never the renderer's start.
+                        import ssdanim
+                        reply(fullscreen(ssdanim.play, scr, kb, anim_palette(),
+                                         parts[1] if len(parts) > 1 else "")); dirty = True
                     elif op == "ptrprobe":
                         # How many devices of a kind are there right now -
                         # lets touchpad.sh look for a driver before the test
@@ -3448,7 +3455,7 @@ def main():
                     sys.stderr.flush()
                     if op in ("menu", "confirm", "input", "msg", "anykey",
                               "pager", "waitkey", "kbtest", "gridmenu", "ptrtest", "camtest", "tstest",
-                              "pixtest", "ptrprobe"):
+                              "pixtest", "ptrprobe", "anim"):
                         reply("")
             now = time.time()
             if dirty and now - last_paint >= 0.1 and \

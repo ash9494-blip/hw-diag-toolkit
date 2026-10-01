@@ -719,6 +719,24 @@ if [ "$1" = "auto" ]; then
   exit 0
 fi
 
+# ---------------------------------------------------------------- how it works
+# Animations of what each test above does inside the drive (ssdanim.py). Last
+# in the menu so the tests keep the numbers people already know them by. The
+# animation runs on through the rest, so picking one is picking where to start.
+how_it_works() {
+  local names=(smart ctrl bench install surface selftest)
+  while :; do
+    tui_menu "How these tests work" "the animations play on from the one you pick - Esc to come back" \
+      "SMART health|reading the drive's own records" \
+      "Controller check|working the controller chip, then waking it from sleep" \
+      "Benchmark|the four CrystalDiskMark profiles" \
+      "Install simulation|filling the SLC cache, the speed cliff, the read-back" \
+      "Surface read scan|every block read, scattered by the map" \
+      "Drive self-test|the drive testing itself" || return 0
+    tui_anim "${names[$((TUI_CHOICE-1))]}"
+  done
+}
+
 # ---------------------------------------------------------------- menu
 # The filesystem benchmark is gone: it measured the filesystem and its page
 # cache as much as the drive, so its numbers were never comparable with the raw
@@ -731,7 +749,8 @@ while :; do
     "Benchmark, raw read + write|burst speed both ways - DESTROYS ALL DATA" \
     "Install simulation|sustained write past the cache - DESTROYS ALL DATA" \
     "Surface read scan|reads every sector looking for unreadable ones" \
-    "Drive self-test|NVMe or SATA - the drive checks itself, data is safe" || break
+    "Drive self-test|NVMe or SATA - the drive checks itself, data is safe" \
+    "How these tests work|animated: what each test does inside the drive" || break
   case "$TUI_CHOICE" in
     1) test_smart ;;
     2) /opt/diag/ctrltest.sh ;;
@@ -740,5 +759,6 @@ while :; do
     5) /opt/diag/installsim.sh ;;
     6) test_surface ;;
     7) /opt/diag/selftest.sh ;;
+    8) how_it_works ;;
   esac
 done
