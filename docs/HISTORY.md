@@ -3,6 +3,112 @@
 Newest first. Each entry says what changed and why; the "why" is usually a
 real machine on Ash's bench.
 
+## 1.19.0 — 2026-10-07
+Released as 1.19.0 at Ash's request ("deploy v1.19 with all the fixes");
+the charging fixes below were built and VM-tested as 1.18.1 first.
+
+- **Charging test: "Charger: connected" after the charger was unplugged**
+  (TECRA A40-J, Ash's photos). The test counted a charger as connected if
+  *any* charger flag was on, and a USB-C port's flag is only the UCSI
+  driver's memory of the last event the port sent - on the A40-J it stayed
+  on. The unplug step timed out, and the USB-C step waited forever for an
+  unplug. Now the firmware's AC flag decides (re-read from the firmware on
+  every look); USB-C flags count only on machines without one. The battery
+  is a second witness: discharging for 5 s after the unplug, or charging
+  while no flag says so, means a flag is wrong - reported as a WARN, and the
+  rest of the test goes by the battery.
+- **USB-C step**: in and out are judged as above, never by the port. The port
+  the charger went into is the one that reports something *new*; when none
+  does, the try still counts as "USB-C try N (the machine did not say which
+  port)". The step now shows the live charger, battery and power figures.
+- **Every charger flag on screen** ("Charger flags: ADP1 off, USB-C 1 on"),
+  and in the report at the unplug and at the end - the evidence for the next
+  machine that disagrees.
+- **The animation never shows its example figures live**: the A40-J's USB-C
+  step showed "62 % not charging" - the example's number, as the step sent
+  no battery figure. No figure is now drawn as "no reading". The charger's
+  wattage is what a USB-C charger offers, or none (was always "65 W"), and a
+  USB-C charger is drawn as a USB-C plug in steps 1-4 too.
+
+## 1.18.0 — 2026-10-02
+- **Animations for the RAM, CPU, battery, charging, USB, Wi-Fi and
+  Ethernet tests** (Ash: "design animation for RAM, CPU test, Battery Test,
+  Charging Test, USB test, Wifi test, Ethernet test as well"). New module
+  `hwanim.py`, the same frame and tools as the drive set. One diagram per
+  test:
+  - RAM: the memory controller, the bus and two SO-DIMMs, with the part
+    Linux holds hatched.
+  - CPU: the die, cold plate, heat pipe, fins and fan.
+  - Battery: the charge path and the cells.
+  - Charging: the DC jack and the firmware's "charger connected" flag.
+  - USB: a USB 3 socket's two rows of contacts.
+  - Wi-Fi: the antenna leads up the lid.
+  - Ethernet: a cable's four twisted pairs.
+- **They play while each test runs, drawn from the test's own figures:**
+  - The CPU's real temperature colours the die and fills the thermometer.
+  - The charge level fills the cells.
+  - A dropped charger connection sparks at the jack and shows in a
+    4-times-a-second strip.
+  - The sockets drawn are the ones the USB test lists, and a held-back
+    socket's SuperSpeed contacts go red.
+  - The negotiated speed lights 4 or 2 of the cable's pairs.
+  - The signal bars follow the real dBm.
+
+  Nothing shows a fault the test has not found.
+- **The operator's instruction stays on screen.** The test's first plain
+  line ("Unplug the charger", "Plug a live network cable in") is shown in
+  bold under the title, and the scene acts it out (the plug moving in or
+  out).
+- **Lower frame rate where the animation would skew a reading:** 1 frame/s
+  in the battery drain (a smooth picture costs the pack being measured), 2
+  in the CPU idle baseline.
+- **"How this test works" entries** in the RAM, CPU and Battery menus; Left
+  / Right moves through all seven. The text interface shows the captions.
+- **Shared engine.** The drive animations' frame, primitives, player and
+  live mode are now shared (`ssdanim.Canvas`, a kit argument). Their frames
+  were checked pixel-identical before and after. ui.py routes a scene to
+  its set and runs each animation at its own frame rate. The build renders
+  every new step in all three themes, three more screen sizes, and live
+  with ordinary and worst-case figures.
+
+## 1.17.0 — 2026-10-01
+- **The animations play while the tests run** (Ash: "i want the animation
+  show when the test is running"). Controller check (load, rest, burst,
+  wake-up), Benchmark (each profile, then the write passes), Install
+  simulation (cache filling, past the cliff, read-back), Surface scan and
+  Drive self-test each start the matching scene and steps, which loop for
+  as long as that phase lasts. Nothing on screen is invented: the title,
+  the side panel ("THIS DRIVE, NOW") and the progress strip carry the
+  test's own lines - its kv rows, alerts, results table and progress bar -
+  and a LIVE tag says the moving parts are a picture. The DRAM chip is
+  drawn as the drive really has it. ui.py: `animlive scene first last dram`
+  and `animstop`; any question or result screen ends it; a failing frame
+  falls back to the usual screen. tui.sh: tui_anim_live / tui_anim_stop
+  (no-ops in text mode). The build check renders every live step too.
+- fix: `waitkey 0` never polled the keyboard, so Q could not stop the
+  install simulation, benchmark passes or heavy controller slices.
+- fix: Heavy mode blamed cooling for any slowdown; now only when the drive
+  actually got hot (throttle counters, within 5 C of its warning limit, or
+  +20 C over the run). A slowdown without heat gets its own warning.
+
+## 1.16.1 — 2026-10-01
+- **Battery test: S and Q did nothing** (Ash: pack stuck at 98%, could not
+  start or leave the test). Steps 1 and 2 read keys from stdin, but the
+  renderer owns the keyboard; they now use its waitkey like every other
+  test (the read-only benchmark's Q had the same fault - fixed too). When
+  the charge has not risen for 10 minutes at 90% or more, step 1 says
+  charging has stopped and S starts from there; the report notes the
+  stall ("a worn pack, or a charge limit").
+- **Controller check - Heavy mode** (Ash: a drive throttled at 83 C - is
+  the controller faulty?). Ten minutes of full load (4 KB random 32x4 +
+  128 KB sequential 16x2 reads, still read only) in 10 s slices tracking
+  speed and temperature, then two minutes' rest and one more burst. Slows
+  when hot but recovers = controller protecting itself, the cooling is the
+  fault; errors, resets, <20% of start for a minute, or <70% after resting
+  = fails under load. The result says which in words; the report has a
+  per-minute speed/temperature table. Standard mode now points to Heavy
+  when it sees throttling.
+
 ## 1.16.0 — 2026-10-01
 - **How these tests work** (HDD / SSD menu, item 8, after the tests so their
   numbers do not move). Ash asked to see what each drive test looks like from

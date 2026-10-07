@@ -189,6 +189,18 @@ if ! chroot $C env DIAG_RUN=/tmp/animcheck python3 /opt/diag/ssdanim.py --check 
   exit 1
 fi
 cat /tmp/animcheck.out
+# The rest of the machine's tests (RAM, CPU, battery, charging, USB, Wi-Fi,
+# Ethernet) play the same way from hwanim.py, live and explained, with the
+# drawing following each test's own figures - every step, every theme, the
+# worst cases (no sensor, cable out, link down) and three more screen sizes.
+[ -f $C/opt/diag/hwanim.py ] \
+  || { echo "BUILD ABORTED - hwanim.py did not reach the image" >&2; exit 1; }
+if ! chroot $C env DIAG_RUN=/tmp/animcheck python3 /opt/diag/hwanim.py --check > /tmp/animcheck.out 2>&1; then
+  echo "BUILD ABORTED - the test animations failed to render:" >&2
+  tail -12 /tmp/animcheck.out >&2
+  exit 1
+fi
+cat /tmp/animcheck.out
 
 # ---- autologin on tty1 and serial ----
 mkdir -p $C/etc/systemd/system/getty@tty1.service.d

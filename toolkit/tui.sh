@@ -112,6 +112,17 @@ tui_grid() {
 
 tui_msg() { local t=$1; shift; _ask msg "$t" "$@"; }
 
+# A test's animation, playing while the test itself runs: scene, first and
+# last step to loop, then options - "own"/"none" for whether a drive has DRAM,
+# "fps=N" for fewer frames. The test keeps drawing its usual frame / kv / line
+# / bar - they fill the animation's side panel and progress strip, and the
+# drawing follows its figures (hwanim.py). Call it once per phase, not in the
+# test's redraw loop: each call starts the loop of steps again. Any question
+# or result screen (anykey, menu, confirm...) stops it; tui_anim_stop ends it
+# early.
+tui_anim_live() { _s animlive "$@"; }
+tui_anim_stop() { _s animstop; }
+
 # A line too long for the screen, wrapped at word boundaries over the rows
 # from $1 (a single tui_line is cut off at the edge). Echoes the next free row.
 tui_para() {   # row text [tone] [width]
@@ -166,6 +177,7 @@ tui_pixtest() { _ask pixtest; PIX_SUMMARY=$UI_ANS; }
 # card name, frames grabbed, fps, mean brightness, dark-frame count.
 tui_camtest() { _ask camtest; CAM_SUMMARY=$UI_ANS; }
 
-# The animated "how it works" for one drive test (ssdanim.py: smart ctrl bench
-# install surface selftest). It moves on through the others; Esc comes back.
+# The animated "how it works" for one test - a drive test (ssdanim.py: smart
+# ctrl bench install surface selftest) or another (hwanim.py: ram cpu battery
+# charge usb wifi ether). It moves on through its set; Esc comes back.
 tui_anim() { _ask anim "$1"; }

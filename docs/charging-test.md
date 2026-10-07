@@ -32,6 +32,16 @@ Battery menu, as first planned). The steps below are what it does.
      mode via toshiba_acpi, also ThinkPad, ASUS). **Read only** - never
      written; changing firmware settings is off limits (invariant 4 spirit).
    - No battery but adapter online -> "runs on the adapter, no battery".
+   - **Which flag decides "connected" (1.19.0).** The Mains flag, when there
+     is one: the ACPI `ac` driver re-reads `_PSR` on every read. A USB-C
+     psy's `online` (and `/sys/class/typec/portN-partner`) is only what the
+     UCSI driver last heard from the port - on the TECRA A40-J the test said
+     "connected" a minute after the unplug and the USB-C step waited forever
+     for an unplug. USB-C flags count only with no Mains flag; with no flags,
+     the battery status. The battery is also a second witness: discharging
+     5 s straight after the unplug, or charging while no flag says so, means
+     a flag is wrong - WARN, and the rest of the run goes by the battery.
+     Every flag is shown on screen ("Charger flags") for the photo.
 
 2. **Unplug / plug** (guided, like the drain test's steps)
    - "Unplug the charger" -> within 10 s: adapter `online=0` and battery
@@ -64,6 +74,10 @@ Battery menu, as first planned). The steps below are what it does.
      `USB-C port 1: charges - PD 20 V 3.25 A (65 W)`.
    - A barrel-jack adapter's wattage cannot be read on Linux; only USB-C PD
      reports it. Say so instead of guessing.
+   - In and out by `plugged()`, never by the port. The port the charger went
+     into is the one whose partner *appears* after the plug; a port that
+     never reported its unplug cannot say, and the try is then recorded as
+     "USB-C try N (the machine did not say which port)".
 
 ## Result
 

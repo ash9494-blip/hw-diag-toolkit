@@ -85,11 +85,24 @@ open_storage() {
 }
 
 # ---------------------------------------------------------------- phases
+# Keys come from the renderer: it owns the keyboard, so reading stdin here
+# saw nothing - S and Q did nothing on a pack stuck at 98%.
+key_wait() { _ask waitkey "$1"; KEY=$(printf '%s' "$UI_ANS" | tr '[:upper:]' '[:lower:]'); }
+
+# A worn pack often stops short of 100% (98% here on Ash's bench) and would
+# hold this step for ever. When the charge has not risen for 10 minutes at
+# 90% or more, say so; S starts the test from there and the report notes it.
+STALL_SECS=600
 wait_for_full() {
-  local k
-  tui_frame "Battery test - step 1 of 3" "Q to cancel    S to skip if this machine has a charge limit set"
+  local best=-1 since stalled=0
+  since=$(date +%s)
+  tui_frame "Battery test - step 1 of 3" "Q to cancel    S to start from the charge it has now"
+  tui_anim_live battery 0 0
   while :; do
     bat_read
+    if [ "$BAT_PCT" -gt "$best" ]; then best=$BAT_PCT; since=$(date +%s); fi
+    [ "$BAT_PCT" -ge 90 ] && [ $(( $(date +%s) - since )) -ge "$STALL_SECS" ] && stalled=1
+    tui_frame "Battery test - step 1 of 3" "Q to cancel    S to start from the charge it has now"
     tui_kv 6  "Battery"        "$(rd "$BAT/manufacturer") $(rd "$BAT/model_name")"
     tui_kv 7  "Design capacity" "$(wh "$BAT_DESIGN_UWH") Wh"
     tui_kv 8  "Reported full"   "$(wh "$BAT_FULL_UWH") Wh"
@@ -97,30 +110,38 @@ wait_for_full() {
     tui_kv 11 "Status"          "$BAT_STATUS"
     tui_bar 13 "$BAT_PCT"
     tui_line 15 "Plug in the charger and leave it until the battery reaches 100%."
-    tui_line 16 "This screen continues on its own once the pack is full." "$MUTE"
+    if [ "$stalled" = 1 ]; then
+      tui_line 16 "Charging has stopped at ${BAT_PCT}% - press S to start the test from here." "$WRN"
+    else
+      tui_line 16 "This screen continues on its own once the pack is full." "$MUTE"
+    fi
     case "$BAT_STATUS" in
       Full) return 0 ;;
       Charging|"Not charging") [ "$BAT_PCT" -ge 100 ] && return 0 ;;
       Discharging) tui_line 16 "Charger is not connected." "$WRN" ;;
     esac
-    IFS= read -rsn1 -t 5 k 2>/dev/null
-    case "$k" in q|Q) return 1 ;; s|S) return 0 ;; esac
+    key_wait 5
+    case "$KEY" in
+      q) return 1 ;;
+      s) [ "$BAT_PCT" -lt 100 ] && state_set CHARGE_STALL "$BAT_PCT"; return 0 ;;
+    esac
   done
 }
 
 wait_for_unplug() {
-  local k
   tui_frame "Battery test - step 2 of 3" "Q to cancel"
-  tui_line 6 "Now unplug the charger."
-  tui_line 8 "The test starts by itself the moment the battery takes over." "$MUTE"
+  tui_anim_live battery 1 1
   while :; do
     bat_read
+    tui_frame "Battery test - step 2 of 3" "Q to cancel"
+    tui_line 6 "Now unplug the charger."
+    tui_line 8 "The test starts by itself the moment the battery takes over." "$MUTE"
     tui_kv 10 "Charge level" "${BAT_PCT} %" "$ACC$B"
     tui_kv 11 "Status"       "$BAT_STATUS" \
       "$([ "$BAT_STATUS" = Discharging ] && echo "$OKC" || echo "$WRN")"
     [ "$BAT_STATUS" = Discharging ] && return 0
-    IFS= read -rsn1 -t 2 k 2>/dev/null
-    case "$k" in q|Q) return 1 ;; esac
+    key_wait 2
+    [ "$KEY" = q ] && return 1
   done
 }
 
@@ -167,6 +188,9 @@ drain() {
 
   local el pct_used rate_wh_h eta used
   tui_frame "Battery test - step 3 of 3, draining" "Q = stop and analyse now    the log survives a shutdown"
+  # One frame a second: a smooth picture would cost the pack being measured -
+  # several watts on an old laptop, and the idle drain would read high.
+  tui_anim_live battery 2 2 fps=1
   while :; do
     bat_read
     el=$(( $(date +%s) - t0 ))
@@ -259,6 +283,8 @@ analyse() {
   rsilent "  as % of gauge claim    : ${vs_full}%"
   rsilent "Average draw             : ${avg_w} W"
   [ "$premature" = 1 ] && rsilent "NOTE: the machine lost power while still indicating ${last_pct}% charge."
+  local stall; stall=$(state_get CHARGE_STALL)
+  [ -n "$stall" ] && rsilent "NOTE: charging stopped at ${stall}% and never reached 100% - the test started from there (a worn pack, or a charge limit)."
   rsilent ""
   rsilent "Reference: 80% of design capacity is the standard end-of-life point for"
   rsilent "lithium cells, usually reached after 300-500 full cycles."
@@ -352,7 +378,8 @@ while :; do
   tui_menu "Battery test" "arrows + ENTER, Q to go back" \
     "Drain test|charge to full, unplug, measure what it actually delivers" \
     "Finish an interrupted test|score a log left behind when the machine died" \
-    "Battery details|capacity, cycle count and what the gauge claims" || break
+    "Battery details|capacity, cycle count and what the gauge claims" \
+    "How this test works|animated: charge, unplug, drain, the account" || break
   case "$TUI_CHOICE" in
     1)
       bat_read
@@ -406,5 +433,6 @@ while :; do
       tui_line 19 "what the pack really delivers, which is often less." "$MUTE"
       tui_anykey "ENTER to go back"
       ;;
+    4) tui_anim battery ;;
   esac
 done

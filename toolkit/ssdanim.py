@@ -7,6 +7,9 @@ read scan, drive self-test, SMART health and the controller - drawn by the
 same renderer as the rest of the toolkit: ui.py hands over its screen, its
 keyboard and the current palette, so every theme and text size works.
 
+The frame and the drawing tools (Canvas), the player and live mode are shared
+with hwanim.py, which draws the rest of the machine's tests the same way.
+
 Each one shows what the toolkit puts on the bus and what the controller and
 the flash do with it. The captions follow what the scripts really do (the fio
 profiles in disktest.sh, the stamped 256 MB chunks in installsim.sh, badblocks,
@@ -182,9 +185,13 @@ SLC_COLS = 2                        # the first two columns of every package: th
 SPARE_COL = COLS - 1                # the last column: spare blocks, in the SMART scene
 
 
-class Stage:
-    """Geometry and drawing for one screen size. Built once; frames are drawn
-    onto a copy of a cached background so only the moving parts cost time."""
+class Canvas:
+    """The frame every animation shares - title and tabs, the diagram area on
+    the left, the side panel, the strip under the diagram and the caption -
+    and the drawing primitives. Stage below draws an SSD in the diagram area;
+    hwanim.py draws the rest of the machine in the same frame. Built once per
+    screen size; frames are drawn onto a copy of a cached background so only
+    the moving parts cost time."""
 
     def __init__(self, scr, pal):
         self.scr = scr
@@ -210,88 +217,61 @@ class Stage:
         self.panel = (self.ix1 - panel_w, self.main_top, self.ix1, main_bot)
         dx0, dx1 = self.ix0, self.panel[0] - int(22 * s)
         self.strip_h = int(52 * s)
-        dy0, dy1 = self.main_top, main_bot - self.strip_h - int(10 * s)
         self.strip_box = (dx0, main_bot - self.strip_h, dx1, main_bot)
-        dw = dx1 - dx0
-
-        # host | bus | board
-        hx1 = dx0 + int(dw * 0.17)
-        self.host = (dx0, dy0 + int(24 * s), hx1, dy1 - int(8 * s))
-        bx0 = hx1 + int(dw * 0.085)
-        self.board = (bx0, dy0, dx1, dy1)
-        bx1 = dx1
-        bh = dy1 - dy0
-        self.bus_x = (hx1, bx0 + int(34 * s))
-        midy = (dy0 + dy1) // 2
-        lane_gap = int(9 * s)
-        self.lanes = [midy - int(1.5 * lane_gap) + i * lane_gap for i in range(4)]
-
-        # controller and its DRAM / HMB chip
-        cs = int(min(bh * 0.46, (bx1 - bx0) * 0.25))
-        cx0 = bx0 + int(34 * s)
-        cy0 = midy - cs // 2 - int(14 * s)
-        self.ctrl = (cx0, cy0, cx0 + cs, cy0 + cs)
-        dh = int(cs * 0.24)
-        self.dram = (cx0 + int(cs * 0.12), cy0 + cs + int(12 * s),
-                     cx0 + cs - int(cs * 0.12), cy0 + cs + int(12 * s) + dh)
-        ci = int(8 * s)
-        inner_w = cs - 2 * ci
-        top = cy0 + int(cs * 0.20)
-        hq = int(cs * 0.30); hm = int(cs * 0.20); he = int(cs * 0.20); g = int(cs * 0.03)
-        self.c_queue = (cx0 + ci, top, cx0 + ci + inner_w, top + hq)
-        self.c_map = (cx0 + ci, top + hq + g, cx0 + ci + inner_w, top + hq + g + hm)
-        self.c_ecc = (cx0 + ci, top + hq + 2 * g + hm, cx0 + ci + inner_w, top + hq + 2 * g + hm + he)
-
-        # flash packages, 2 x 2
-        nx0 = self.ctrl[2] + int((bx1 - bx0) * 0.12)
-        nx1 = bx1 - int(16 * s)
-        ny0 = dy0 + int(30 * s)
-        ny1 = dy1 - int(14 * s)
-        gx = int(16 * s); gy = int(14 * s)
-        pw = (nx1 - nx0 - gx) // 2
-        ph = (ny1 - ny0 - gy) // 2
-        self.pkgs = []
-        for i in range(PKGS):
-            px = nx0 + (i % 2) * (pw + gx)
-            py = ny0 + (i // 2) * (ph + gy)
-            self.pkgs.append((px, py, px + pw, py + ph))
-        lab = int(20 * s)
-        self.cells = {}
-        for p, (px0, py0, px1, py1) in enumerate(self.pkgs):
-            gx0, gy0 = px0 + int(7 * s), py0 + lab
-            gw, gh = px1 - int(7 * s) - gx0, py1 - int(7 * s) - gy0
-            cw, ch = gw / COLS, gh / ROWS
-            m = max(1, int(2 * s))
-            for r in range(ROWS):
-                for c in range(COLS):
-                    self.cells[(p, r, c)] = (int(gx0 + c * cw) + m, int(gy0 + r * ch) + m,
-                                             int(gx0 + (c + 1) * cw) - m, int(gy0 + (r + 1) * ch) - m)
-        # One trace per channel, controller -> package. The left column is
-        # reached directly; the right column through the corridor between the
-        # rows and the gap between the columns, so no trace crosses a package.
-        pk = self.pkgs
-        sx = self.ctrl[2]
-        cor = (pk[0][3] + pk[2][1]) // 2
-        gapx = (pk[0][2] + pk[1][0]) // 2
-        o = max(2, int(3 * s))
-        span = pk[0][0] - sx
-        order = {0: 0.30, 1: 0.45, 3: 0.60, 2: 0.75}      # where each leaves the chip
-        trunk = {0: 0.62, 1: 0.30, 3: 0.40, 2: 0.62}      # where each turns
-        self.traces = [None] * PKGS
-        for p in range(PKGS):
-            sy = self.ctrl[1] + int(cs * order[p])
-            kx = sx + int(span * trunk[p])
-            ty = (pk[p][1] + pk[p][3]) // 2
-            if p in (0, 2):
-                self.traces[p] = [(sx, sy), (kx, sy), (kx, ty), (pk[p][0], ty)]
-            else:
-                cy = cor - o if p == 1 else cor + o
-                gx = gapx - o if p == 1 else gapx + o
-                self.traces[p] = [(sx, sy), (kx, sy), (kx, cy), (gx, cy), (gx, ty), (pk[p][0], ty)]
-        self._bot_geometry()
+        self.area = (dx0, self.main_top, dx1, main_bot - self.strip_h - int(10 * s))
+        self.lt = 0.0               # seconds into the current step
+        self.clock = 0.0            # live: seconds since the test's phase began
+        self.bots = []
+        self.bot_size(int(26 * s))
         self._tc = {}
         self._bg = {}
         self._bg_t = 0.0
+
+    def bot_size(self, bh, box=None):
+        """Robot height in pixels; the rest of a robot follows from it."""
+        self.bh = bh
+        self.bw = int(bh * 0.62)
+        self.box = box if box else max(5, int(bh * 0.30))
+        self.arm = int(self.bw * 0.45)
+
+    def bot(self, xy, held=None, seed=0, busy=False, mood=""):
+        """A robot standing at xy (where its wheels touch), for scenes that
+        place their own; drawn last, by draw_bots, so nothing hides it."""
+        self.bots.append((xy, held, seed, busy, mood))
+
+    def cached(self, key):
+        """A background built earlier - none once the header clock is stale."""
+        now = time.time()
+        if now - self._bg_t > 20:
+            self._bg = {}; self._bg_t = now
+        return self._bg.get(key)
+
+    def chrome(self, scenes, short, scene_i):
+        """A new background with what every scene has: the header, the card,
+        the title, the tabs and the side panel's frame."""
+        from PIL import Image, ImageDraw
+        P, s, scr = self.P, self.s, self.scr
+        img = Image.new("RGB", (self.W, self.H), P.GROUND)
+        d = ImageDraw.Draw(img)
+        scr._draw_header(img, d)
+        scr._card(d)
+        self.text(d, (self.ix0, self.title_y), "How it works - " + scenes[scene_i][1], scr.f_h, P.INK)
+        self.text(d, (self.ix1, self.title_y + int(6 * s)),
+                  "%d of %d" % (scene_i + 1, len(scenes)), scr.f_small, P.MUTED, "ra")
+        # the tabs: where this one sits among the rest
+        x = self.ix0
+        ty = self.tabs_y + int(4 * s)
+        for i, sc in enumerate(scenes):
+            on = i == scene_i
+            f = scr.f_bodyb if on else scr.f_small
+            tw = d.textlength(short[sc[0]], font=f)
+            self.text(d, (x, ty + int(12 * s)), short[sc[0]], f, P.INK if on else P.MUTED, "lm")
+            if on:
+                d.rectangle([x, ty + int(28 * s), x + tw, ty + int(31 * s)], fill=P.ACCENT)
+            x += tw + int(30 * s)
+        d.line([self.ix0, ty + int(31 * s), self.ix1, ty + int(31 * s)], fill=P.LINE, width=1)
+        self.rr(d, self.panel, fill=P.PAPER, outline=P.LINE, width=max(1, int(2 * s)))
+        return img, d
 
     # ---- primitives --------------------------------------------------
     def rr(self, d, box, fill=None, outline=None, width=1, r=None):
@@ -362,187 +342,18 @@ class Stage:
             lines[-1] = lines[-1].rstrip(".,") + "..."
         return lines
 
-    # ---- the static picture -----------------------------------------
-    def background(self, scene_i, labels):
-        """Header, card, title, tabs, host, board outline, chips, traces.
-        Rebuilt when the scene changes and every 20 s, for the header clock."""
-        from PIL import Image, ImageDraw
-        key = (scene_i, labels)
-        now = time.time()
-        if now - self._bg_t > 20:
-            self._bg = {}; self._bg_t = now
-        if key in self._bg:
-            return self._bg[key]
-        P, s, scr = self.P, self.s, self.scr
-        img = Image.new("RGB", (self.W, self.H), P.GROUND)
-        d = ImageDraw.Draw(img)
-        scr._draw_header(img, d)
-        scr._card(d)
-        name, title, prog, beats = SCENES[scene_i]
-
-        self.text(d, (self.ix0, self.title_y), "How it works - " + title, scr.f_h, P.INK)
-        self.text(d, (self.ix1, self.title_y + int(6 * s)),
-                  "%d of %d" % (scene_i + 1, len(SCENES)), scr.f_small, P.MUTED, "ra")
-        # the tabs: where this one sits among the five
-        x = self.ix0
-        ty = self.tabs_y + int(4 * s)
-        for i, sc in enumerate(SCENES):
-            on = i == scene_i
-            f = scr.f_bodyb if on else scr.f_small
-            tw = d.textlength(SHORT[sc[0]], font=f)
-            self.text(d, (x, ty + int(12 * s)), SHORT[sc[0]], f, P.INK if on else P.MUTED, "lm")
-            if on:
-                d.rectangle([x, ty + int(28 * s), x + tw, ty + int(31 * s)], fill=P.ACCENT)
-            x += tw + int(30 * s)
-        d.line([self.ix0, ty + int(31 * s), self.ix1, ty + int(31 * s)], fill=P.LINE, width=1)
-
-        # host
-        hx0, hy0, hx1, hy1 = self.host
-        self.rr(d, self.host, fill=P.PAPER, outline=P.MUTED, width=max(1, int(2 * s)))
-        self.text(d, ((hx0 + hx1) // 2, hy0 - int(6 * s)), "THIS LAPTOP", scr.f_note, P.MUTED, "md")
-        hh = hy1 - hy0
-        self.h_cpu = (hx0 + int(8 * s), hy0 + int(hh * 0.10), hx1 - int(8 * s), hy0 + int(hh * 0.40))
-        self.h_ram = (hx0 + int(8 * s), hy0 + int(hh * 0.52), hx1 - int(8 * s), hy0 + int(hh * 0.90))
-        self.rr(d, self.h_cpu, fill=P.CHIP, outline=P.LINE)
-        self.text(d, ((self.h_cpu[0] + self.h_cpu[2]) // 2, self.h_cpu[1] + int(6 * s)),
-                  "CPU", scr.f_tiny, P.MUTED, "ma")
-        self.text(d, ((self.h_cpu[0] + self.h_cpu[2]) // 2, (self.h_cpu[1] + self.h_cpu[3]) // 2 + int(8 * s)),
-                  prog, scr.f_noteb, P.INK, "mm")
-        self.rr(d, self.h_ram, fill=P.CHIP, outline=P.LINE)
-        self.text(d, ((self.h_ram[0] + self.h_ram[2]) // 2, self.h_ram[1] + int(6 * s)),
-                  "RAM", scr.f_tiny, P.MUTED, "ma")
-
-        # bus
-        bx0, bx1 = self.bus_x
-        for y in self.lanes:
-            d.line([bx0, y, bx1, y], fill=P.LINE, width=max(2, int(3 * s)))
-        self.text(d, ((hx1 + self.board[0]) // 2, self.lanes[0] - int(10 * s)), "PCIe", scr.f_note, P.MUTED, "md")
-
-        # board, connector fingers, chips
-        b = self.board
-        self.rr(d, b, fill=P.BOARD, outline=P.MUTED, width=max(1, int(2 * s)), r=int(10 * s))
-        fx = b[0] + int(4 * s)
-        for i in range(10):
-            fy = self.lanes[0] - int(30 * s) + i * int(9 * s)
-            if self.lanes[-1] + int(40 * s) > fy:
-                d.rectangle([fx, fy, fx + int(10 * s), fy + int(5 * s)], fill=P.GOLD)
-        self.text(d, (b[0] + int(30 * s), b[1] + int(8 * s)), "SSD  (M.2 NVMe)", scr.f_noteb, P.INK)
-
-        for tr in self.traces:
-            d.line(tr, fill=P.LINE, width=max(2, int(3 * s)), joint="curve")
-
-        c = self.ctrl
-        self.rr(d, c, fill=P.CHIP, outline=P.INK, width=max(1, int(2 * s)))
-        self.text(d, ((c[0] + c[2]) // 2, c[1] + int(7 * s)), "CONTROLLER", scr.f_noteb, P.INK, "ma")
-        for box, lab in zip((self.c_queue, self.c_map, self.c_ecc), labels):
-            self.rr(d, box, fill=P.PAPER, outline=P.LINE)
-            self.text(d, (box[0] + int(5 * s), box[1] + int(3 * s)), lab, scr.f_tiny, P.MUTED)
-        self.rr(d, self.dram, fill=P.CHIP, outline=P.MUTED)
-        self.text(d, ((self.dram[0] + self.dram[2]) // 2, (self.dram[1] + self.dram[3]) // 2),
-                  "DRAM / HMB", scr.f_tiny, P.MUTED, "mm")
-
-        for p, box in enumerate(self.pkgs):
-            self.rr(d, box, fill=P.CHIP, outline=P.MUTED)
-            self.text(d, (box[0] + int(7 * s), box[1] + int(3 * s)),
-                      "NAND  ch %d" % p, scr.f_tiny, P.MUTED)
-
-        # what the robots are, on every scene
-        self.text(d, (self.strip_box[2], self.strip_box[1]), "robot = one flash channel of the controller",
-                  scr.f_tiny, P.MUTED, "ra")
-
-        # the panel frame
-        self.rr(d, self.panel, fill=P.PAPER, outline=P.LINE, width=max(1, int(2 * s)))
-        self._bg[key] = img
-        return img
-
-    # ---- moving parts -----------------------------------------------
-    def cell(self, d, key, fill, outline=None):
-        b = self.cells[key]
-        d.rectangle(b, fill=fill, outline=outline)
-
-    def draw_cells(self, d, state):
-        """state(p, r, c) -> fill colour (or None for empty)."""
-        P = self.P
-        for k in self.cells:
-            col = state(*k)
-            self.cell(d, k, col if col else P.PAPER, P.LINE if not col else None)
-
-    def slc_tint(self, d):
-        """Mark the SLC columns faintly so the cache region is always visible."""
-        P = self.P
-        for p in range(PKGS):
-            a = self.cells[(p, 0, 0)]; b = self.cells[(p, ROWS - 1, SLC_COLS - 1)]
-            d.rectangle([a[0] - 2, a[1] - 2, b[2] + 2, b[3] + 2], outline=P.SLCD)
-
-    def lane_packet(self, d, u, lane, to_drive=True, filled=True, big=False, label=None):
-        """A packet on a bus lane: u 0..1 along the trip."""
-        P, s = self.P, self.s
-        bx0, bx1 = self.bus_x
-        x0, x1 = (self.host[2], self.ctrl[0]) if to_drive else (self.ctrl[0], self.host[2])
-        x = lerp(x0, x1, ease(u)) if True else 0
-        y = self.lanes[lane % 4]
-        w = int((16 if big else 9) * s); h = int((7 if big else 5) * s)
-        box = (int(x - w / 2), int(y - h), int(x + w / 2), int(y + h))
-        if filled:
-            self.rr(d, box, fill=P.ACCENT, r=int(2 * s))
-        else:
-            self.rr(d, box, fill=P.PAPER, outline=P.ACCENT, width=max(1, int(2 * s)), r=int(2 * s))
-        if label:
-            # in the gap between laptop and board, where nothing else is drawn
-            self.tag(d, ((self.host[2] + self.board[0]) / 2, self.lanes[-1] + int(24 * s)), label,
-                     bg=P.ACCENT)
-
-    def lit_lanes(self, d, k):
-        """Brightness of the bus: 0 idle .. 1 flat out."""
-        P = self.P
-        col = mix(P.LINE, P.ACCENT, clamp(k) * 0.55)
-        bx0, bx1 = self.bus_x
-        for y in self.lanes:
-            d.line([bx0, y, bx1, y], fill=col, width=max(2, int(3 * self.s)))
-
-    def trace_pulse(self, d, p, u, r=None):
-        r = r or max(2, int(4 * self.s))
-        self.dot(d, self.along(self.traces[p], u), r, self.P.ACCENT)
-
-    def trace_lit(self, d, p, k=1.0):
-        col = mix(self.P.LINE, self.P.ACCENT, 0.6 * clamp(k))
-        d.line(self.traces[p], fill=col, width=max(2, int(3 * self.s)), joint="curve")
-
+    # ---- labels and highlights ------------------------------------
     def glow(self, d, box, col=None, w=None):
         x0, y0, x1, y1 = box
         g = int(3 * self.s)
         self.rr(d, (x0 - g, y0 - g, x1 + g, y1 + g), outline=col or self.P.ACCENT,
                 width=w or max(2, int(3 * self.s)))
 
-    def queue(self, d, depth, busy):
-        """Command slots inside the controller."""
-        P, s = self.P, self.s
-        x0, y0, x1, y1 = self.c_queue
-        y0 += int(20 * s)
-        cols = min(depth, 8)
-        rows = (depth + cols - 1) // cols
-        cw = (x1 - x0 - int(8 * s)) / cols
-        ch = min((y1 - y0 - int(4 * s)) / max(rows, 1), cw)
-        for i in range(depth):
-            r, c = divmod(i, cols)
-            bx = x0 + int(4 * s) + c * cw
-            by = y0 + r * ch
-            m = max(1, int(1.5 * s))
-            d.rectangle([int(bx) + m, int(by) + m, int(bx + cw) - m, int(by + ch) - m],
-                        fill=P.ACCENT if i < busy else P.PAPER, outline=P.LINE)
-
     def chip_label(self, d, box, text, col=None, above=False):
         s = self.s
         x = (box[0] + box[2]) // 2
         y = box[1] - int(5 * s) if above else box[3] + int(5 * s)
         self.text(d, (x, y), text, self.scr.f_tiny, col or self.P.ACCENT, "md" if above else "ma")
-
-    def callout(self, d, text, bg=None):
-        """The board's caption spot, under the DRAM chip."""
-        f = self.scr.f_tiny
-        tw = d.textlength(text, font=f)
-        x = self.board[0] + int(20 * self.s) + tw / 2
-        self.tag(d, (x, self.dram[3] + int(46 * self.s)), text, bg=bg or self.P.INK)
 
     def tag(self, d, xy, text, fg=None, bg=None, f=None):
         """A small filled label, for callouts on the diagram."""
@@ -554,76 +365,9 @@ class Stage:
         self.rr(d, box, fill=bg or P.ACCENT, r=int(5 * s))
         self.text(d, (x, y), text, f, fg or P.PAPER, "mm")
 
-    # ---- the robots -------------------------------------------------
-    # One robot per flash channel: the controller's way of getting data onto
-    # and off its own chip, drawn as a warehouse robot carrying boxes. A
-    # scene books trips with job() / walk() / idle(); they are drawn last, on
-    # top of everything, so a robot is never hidden behind what it carries.
-    def _bot_geometry(self):
-        c = self.cells[(0, 0, 0)]
-        cw, ch = c[2] - c[0], c[3] - c[1]
-        self.bh = max(int(ch * 1.45), int(26 * self.s))
-        self.bw = int(self.bh * 0.62)
-        self.box = max(5, int(min(cw, ch) * 0.85))
-        self.arm = int(self.bw * 0.45)
-        self.bots = []
-
-    def stand(self, key):
-        """Where a robot stands to reach a block: just left of it, hand in it."""
-        b = self.cells[key]
-        cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
-        return (cx - self.bw / 2 - self.arm, cy + self.bh * 0.35)
-
-    def dock(self, p):
-        """The robot's place at the door of its chip, where the trace arrives."""
-        px0, py0, px1, py1 = self.pkgs[p]
-        return (px0 - self.bw * 0.15, (py0 + py1) / 2 + self.bh * 0.35)
-
-    def idle(self, p, mood=""):
-        self.bots.append((self.dock(p), None, p, False, mood))
-
-    def job(self, p, stops, carry, v):
-        """Dock -> each stop in turn -> dock, v 0..1 through the trip.
-        carry[i] is the box held on leg i (leg 0 leaves the dock), so
-        [None, X] fetches a block (a read) and [X, None] shelves one (a write).
-        Returns (done, at): which stops are finished, and the stop being
-        worked at right now, so the scene can colour the shelves to match."""
-        pts = [self.dock(p)] + [self.stand(k) for k in stops] + [self.dock(p)]
-        n = len(stops)
-        tl, tp = 0.7 / (n + 1), 0.3 / max(n, 1)
-        v = clamp(v)
-        done, at = [False] * n, None
-        acc = 0.0
-        pos, held = pts[-1], carry[-1]
-        for i in range(n + 1):
-            if v < acc + tl:
-                k = ease((v - acc) / tl)
-                pos = (lerp(pts[i][0], pts[i + 1][0], k), lerp(pts[i][1], pts[i + 1][1], k))
-                held = carry[i]
-                break
-            acc += tl
-            if i < n:
-                if v < acc + tp:
-                    k = (v - acc) / tp
-                    pos, at = pts[i + 1], stops[i]
-                    held = carry[i] if k < 0.5 else carry[i + 1]
-                    done[i] = k >= 0.5
-                    break
-                acc += tp
-                done[i] = True
-        self.bots.append((pos, held, p, v < 1.0, ""))
-        return done, at
-
-    def walk(self, p, keys, f):
-        """Walk along a row of blocks, f = how many have been passed."""
-        f = clamp(f, 0, len(keys) - 1e-6)
-        i = int(f); k = f - i
-        a = self.stand(keys[i])
-        b = self.stand(keys[min(i + 1, len(keys) - 1)])
-        hop = ease(seg(k, 0.6, 1.0))
-        self.bots.append(((lerp(a[0], b[0], hop), lerp(a[1], b[1], hop)), None, p, True, ""))
-        return i
-
+    # ---- robots ---------------------------------------------------
+    # A scene's workers. Each is drawn last, on top of everything, so a
+    # robot is never hidden behind what it carries.
     def draw_bots(self, d, t):
         P, h, w = self.P, self.bh, self.bw
         body = mix(P.INK, P.PAPER, 0.20)
@@ -758,6 +502,305 @@ class Stage:
         ty = y + int(28 * s)
         for i, line in enumerate(self.wrap(d, text, self.f_cap, x1 - x0)):
             self.text(d, (x0, ty + i * self.cap_lh), line, self.f_cap, P.INK)
+
+
+class Stage(Canvas):
+    """The SSD: the laptop, the PCIe bus and the drive's board, with the
+    robots that are its flash channels."""
+
+    def __init__(self, scr, pal):
+        Canvas.__init__(self, scr, pal)
+        self.dramless = True        # the scenes' example drive; Live sets the real one
+        s = self.s
+        dx0, dy0, dx1, dy1 = self.area
+        dw = dx1 - dx0
+
+        # host | bus | board
+        hx1 = dx0 + int(dw * 0.17)
+        self.host = (dx0, dy0 + int(24 * s), hx1, dy1 - int(8 * s))
+        bx0 = hx1 + int(dw * 0.085)
+        self.board = (bx0, dy0, dx1, dy1)
+        bx1 = dx1
+        bh = dy1 - dy0
+        self.bus_x = (hx1, bx0 + int(34 * s))
+        midy = (dy0 + dy1) // 2
+        lane_gap = int(9 * s)
+        self.lanes = [midy - int(1.5 * lane_gap) + i * lane_gap for i in range(4)]
+
+        # controller and its DRAM / HMB chip
+        cs = int(min(bh * 0.46, (bx1 - bx0) * 0.25))
+        cx0 = bx0 + int(34 * s)
+        cy0 = midy - cs // 2 - int(14 * s)
+        self.ctrl = (cx0, cy0, cx0 + cs, cy0 + cs)
+        dh = int(cs * 0.24)
+        self.dram = (cx0 + int(cs * 0.12), cy0 + cs + int(12 * s),
+                     cx0 + cs - int(cs * 0.12), cy0 + cs + int(12 * s) + dh)
+        ci = int(8 * s)
+        inner_w = cs - 2 * ci
+        top = cy0 + int(cs * 0.20)
+        hq = int(cs * 0.30); hm = int(cs * 0.20); he = int(cs * 0.20); g = int(cs * 0.03)
+        self.c_queue = (cx0 + ci, top, cx0 + ci + inner_w, top + hq)
+        self.c_map = (cx0 + ci, top + hq + g, cx0 + ci + inner_w, top + hq + g + hm)
+        self.c_ecc = (cx0 + ci, top + hq + 2 * g + hm, cx0 + ci + inner_w, top + hq + 2 * g + hm + he)
+
+        # flash packages, 2 x 2
+        nx0 = self.ctrl[2] + int((bx1 - bx0) * 0.12)
+        nx1 = bx1 - int(16 * s)
+        ny0 = dy0 + int(30 * s)
+        ny1 = dy1 - int(14 * s)
+        gx = int(16 * s); gy = int(14 * s)
+        pw = (nx1 - nx0 - gx) // 2
+        ph = (ny1 - ny0 - gy) // 2
+        self.pkgs = []
+        for i in range(PKGS):
+            px = nx0 + (i % 2) * (pw + gx)
+            py = ny0 + (i // 2) * (ph + gy)
+            self.pkgs.append((px, py, px + pw, py + ph))
+        lab = int(20 * s)
+        self.cells = {}
+        for p, (px0, py0, px1, py1) in enumerate(self.pkgs):
+            gx0, gy0 = px0 + int(7 * s), py0 + lab
+            gw, gh = px1 - int(7 * s) - gx0, py1 - int(7 * s) - gy0
+            cw, ch = gw / COLS, gh / ROWS
+            m = max(1, int(2 * s))
+            for r in range(ROWS):
+                for c in range(COLS):
+                    self.cells[(p, r, c)] = (int(gx0 + c * cw) + m, int(gy0 + r * ch) + m,
+                                             int(gx0 + (c + 1) * cw) - m, int(gy0 + (r + 1) * ch) - m)
+        # One trace per channel, controller -> package. The left column is
+        # reached directly; the right column through the corridor between the
+        # rows and the gap between the columns, so no trace crosses a package.
+        pk = self.pkgs
+        sx = self.ctrl[2]
+        cor = (pk[0][3] + pk[2][1]) // 2
+        gapx = (pk[0][2] + pk[1][0]) // 2
+        o = max(2, int(3 * s))
+        span = pk[0][0] - sx
+        order = {0: 0.30, 1: 0.45, 3: 0.60, 2: 0.75}      # where each leaves the chip
+        trunk = {0: 0.62, 1: 0.30, 3: 0.40, 2: 0.62}      # where each turns
+        self.traces = [None] * PKGS
+        for p in range(PKGS):
+            sy = self.ctrl[1] + int(cs * order[p])
+            kx = sx + int(span * trunk[p])
+            ty = (pk[p][1] + pk[p][3]) // 2
+            if p in (0, 2):
+                self.traces[p] = [(sx, sy), (kx, sy), (kx, ty), (pk[p][0], ty)]
+            else:
+                cy = cor - o if p == 1 else cor + o
+                gx = gapx - o if p == 1 else gapx + o
+                self.traces[p] = [(sx, sy), (kx, sy), (kx, cy), (gx, cy), (gx, ty), (pk[p][0], ty)]
+        self._bot_geometry()
+
+    # ---- the static picture -----------------------------------------
+    def background(self, scene_i, labels):
+        """Header, card, title, tabs, host, board outline, chips, traces.
+        Rebuilt when the scene changes and every 20 s, for the header clock."""
+        key = (scene_i, labels)
+        img = self.cached(key)
+        if img is not None:
+            return img
+        img, d = self.chrome(SCENES, SHORT, scene_i)
+        P, s, scr = self.P, self.s, self.scr
+        name, title, prog, beats = SCENES[scene_i]
+
+        # host
+        hx0, hy0, hx1, hy1 = self.host
+        self.rr(d, self.host, fill=P.PAPER, outline=P.MUTED, width=max(1, int(2 * s)))
+        self.text(d, ((hx0 + hx1) // 2, hy0 - int(6 * s)), "THIS LAPTOP", scr.f_note, P.MUTED, "md")
+        hh = hy1 - hy0
+        self.h_cpu = (hx0 + int(8 * s), hy0 + int(hh * 0.10), hx1 - int(8 * s), hy0 + int(hh * 0.40))
+        self.h_ram = (hx0 + int(8 * s), hy0 + int(hh * 0.52), hx1 - int(8 * s), hy0 + int(hh * 0.90))
+        self.rr(d, self.h_cpu, fill=P.CHIP, outline=P.LINE)
+        self.text(d, ((self.h_cpu[0] + self.h_cpu[2]) // 2, self.h_cpu[1] + int(6 * s)),
+                  "CPU", scr.f_tiny, P.MUTED, "ma")
+        self.text(d, ((self.h_cpu[0] + self.h_cpu[2]) // 2, (self.h_cpu[1] + self.h_cpu[3]) // 2 + int(8 * s)),
+                  prog, scr.f_noteb, P.INK, "mm")
+        self.rr(d, self.h_ram, fill=P.CHIP, outline=P.LINE)
+        self.text(d, ((self.h_ram[0] + self.h_ram[2]) // 2, self.h_ram[1] + int(6 * s)),
+                  "RAM", scr.f_tiny, P.MUTED, "ma")
+
+        # bus
+        bx0, bx1 = self.bus_x
+        for y in self.lanes:
+            d.line([bx0, y, bx1, y], fill=P.LINE, width=max(2, int(3 * s)))
+        self.text(d, ((hx1 + self.board[0]) // 2, self.lanes[0] - int(10 * s)), "PCIe", scr.f_note, P.MUTED, "md")
+
+        # board, connector fingers, chips
+        b = self.board
+        self.rr(d, b, fill=P.BOARD, outline=P.MUTED, width=max(1, int(2 * s)), r=int(10 * s))
+        fx = b[0] + int(4 * s)
+        for i in range(10):
+            fy = self.lanes[0] - int(30 * s) + i * int(9 * s)
+            if self.lanes[-1] + int(40 * s) > fy:
+                d.rectangle([fx, fy, fx + int(10 * s), fy + int(5 * s)], fill=P.GOLD)
+        self.text(d, (b[0] + int(30 * s), b[1] + int(8 * s)), "SSD  (M.2 NVMe)", scr.f_noteb, P.INK)
+
+        for tr in self.traces:
+            d.line(tr, fill=P.LINE, width=max(2, int(3 * s)), joint="curve")
+
+        c = self.ctrl
+        self.rr(d, c, fill=P.CHIP, outline=P.INK, width=max(1, int(2 * s)))
+        self.text(d, ((c[0] + c[2]) // 2, c[1] + int(7 * s)), "CONTROLLER", scr.f_noteb, P.INK, "ma")
+        for box, lab in zip((self.c_queue, self.c_map, self.c_ecc), labels):
+            self.rr(d, box, fill=P.PAPER, outline=P.LINE)
+            self.text(d, (box[0] + int(5 * s), box[1] + int(3 * s)), lab, scr.f_tiny, P.MUTED)
+        self.rr(d, self.dram, fill=P.CHIP, outline=P.MUTED)
+        self.text(d, ((self.dram[0] + self.dram[2]) // 2, (self.dram[1] + self.dram[3]) // 2),
+                  "DRAM / HMB", scr.f_tiny, P.MUTED, "mm")
+
+        for p, box in enumerate(self.pkgs):
+            self.rr(d, box, fill=P.CHIP, outline=P.MUTED)
+            self.text(d, (box[0] + int(7 * s), box[1] + int(3 * s)),
+                      "NAND  ch %d" % p, scr.f_tiny, P.MUTED)
+
+        # what the robots are, on every scene
+        self.text(d, (self.strip_box[2], self.strip_box[1]), "robot = one flash channel of the controller",
+                  scr.f_tiny, P.MUTED, "ra")
+        self._bg[key] = img
+        return img
+
+    # ---- moving parts -----------------------------------------------
+    def cell(self, d, key, fill, outline=None):
+        b = self.cells[key]
+        d.rectangle(b, fill=fill, outline=outline)
+
+    def draw_cells(self, d, state):
+        """state(p, r, c) -> fill colour (or None for empty)."""
+        P = self.P
+        for k in self.cells:
+            col = state(*k)
+            self.cell(d, k, col if col else P.PAPER, P.LINE if not col else None)
+
+    def slc_tint(self, d):
+        """Mark the SLC columns faintly so the cache region is always visible."""
+        P = self.P
+        for p in range(PKGS):
+            a = self.cells[(p, 0, 0)]; b = self.cells[(p, ROWS - 1, SLC_COLS - 1)]
+            d.rectangle([a[0] - 2, a[1] - 2, b[2] + 2, b[3] + 2], outline=P.SLCD)
+
+    def lane_packet(self, d, u, lane, to_drive=True, filled=True, big=False, label=None):
+        """A packet on a bus lane: u 0..1 along the trip."""
+        P, s = self.P, self.s
+        bx0, bx1 = self.bus_x
+        x0, x1 = (self.host[2], self.ctrl[0]) if to_drive else (self.ctrl[0], self.host[2])
+        x = lerp(x0, x1, ease(u)) if True else 0
+        y = self.lanes[lane % 4]
+        w = int((16 if big else 9) * s); h = int((7 if big else 5) * s)
+        box = (int(x - w / 2), int(y - h), int(x + w / 2), int(y + h))
+        if filled:
+            self.rr(d, box, fill=P.ACCENT, r=int(2 * s))
+        else:
+            self.rr(d, box, fill=P.PAPER, outline=P.ACCENT, width=max(1, int(2 * s)), r=int(2 * s))
+        if label:
+            # in the gap between laptop and board, where nothing else is drawn
+            self.tag(d, ((self.host[2] + self.board[0]) / 2, self.lanes[-1] + int(24 * s)), label,
+                     bg=P.ACCENT)
+
+    def lit_lanes(self, d, k):
+        """Brightness of the bus: 0 idle .. 1 flat out."""
+        P = self.P
+        col = mix(P.LINE, P.ACCENT, clamp(k) * 0.55)
+        bx0, bx1 = self.bus_x
+        for y in self.lanes:
+            d.line([bx0, y, bx1, y], fill=col, width=max(2, int(3 * self.s)))
+
+    def trace_pulse(self, d, p, u, r=None):
+        r = r or max(2, int(4 * self.s))
+        self.dot(d, self.along(self.traces[p], u), r, self.P.ACCENT)
+
+    def trace_lit(self, d, p, k=1.0):
+        col = mix(self.P.LINE, self.P.ACCENT, 0.6 * clamp(k))
+        d.line(self.traces[p], fill=col, width=max(2, int(3 * self.s)), joint="curve")
+
+    def queue(self, d, depth, busy):
+        """Command slots inside the controller."""
+        P, s = self.P, self.s
+        x0, y0, x1, y1 = self.c_queue
+        y0 += int(20 * s)
+        cols = min(depth, 8)
+        rows = (depth + cols - 1) // cols
+        cw = (x1 - x0 - int(8 * s)) / cols
+        ch = min((y1 - y0 - int(4 * s)) / max(rows, 1), cw)
+        for i in range(depth):
+            r, c = divmod(i, cols)
+            bx = x0 + int(4 * s) + c * cw
+            by = y0 + r * ch
+            m = max(1, int(1.5 * s))
+            d.rectangle([int(bx) + m, int(by) + m, int(bx + cw) - m, int(by + ch) - m],
+                        fill=P.ACCENT if i < busy else P.PAPER, outline=P.LINE)
+
+    def callout(self, d, text, bg=None):
+        """The board's caption spot, under the DRAM chip."""
+        f = self.scr.f_tiny
+        tw = d.textlength(text, font=f)
+        x = self.board[0] + int(20 * self.s) + tw / 2
+        self.tag(d, (x, self.dram[3] + int(46 * self.s)), text, bg=bg or self.P.INK)
+
+    # ---- the robots -------------------------------------------------
+    # One robot per flash channel: the controller's way of getting data onto
+    # and off its own chip, drawn as a warehouse robot carrying boxes. A
+    # scene books trips with job() / walk() / idle(); they are drawn last, on
+    # top of everything, so a robot is never hidden behind what it carries.
+    def _bot_geometry(self):
+        c = self.cells[(0, 0, 0)]
+        cw, ch = c[2] - c[0], c[3] - c[1]
+        self.bot_size(max(int(ch * 1.45), int(26 * self.s)), max(5, int(min(cw, ch) * 0.85)))
+
+    def stand(self, key):
+        """Where a robot stands to reach a block: just left of it, hand in it."""
+        b = self.cells[key]
+        cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+        return (cx - self.bw / 2 - self.arm, cy + self.bh * 0.35)
+
+    def dock(self, p):
+        """The robot's place at the door of its chip, where the trace arrives."""
+        px0, py0, px1, py1 = self.pkgs[p]
+        return (px0 - self.bw * 0.15, (py0 + py1) / 2 + self.bh * 0.35)
+
+    def idle(self, p, mood=""):
+        self.bots.append((self.dock(p), None, p, False, mood))
+
+    def job(self, p, stops, carry, v):
+        """Dock -> each stop in turn -> dock, v 0..1 through the trip.
+        carry[i] is the box held on leg i (leg 0 leaves the dock), so
+        [None, X] fetches a block (a read) and [X, None] shelves one (a write).
+        Returns (done, at): which stops are finished, and the stop being
+        worked at right now, so the scene can colour the shelves to match."""
+        pts = [self.dock(p)] + [self.stand(k) for k in stops] + [self.dock(p)]
+        n = len(stops)
+        tl, tp = 0.7 / (n + 1), 0.3 / max(n, 1)
+        v = clamp(v)
+        done, at = [False] * n, None
+        acc = 0.0
+        pos, held = pts[-1], carry[-1]
+        for i in range(n + 1):
+            if v < acc + tl:
+                k = ease((v - acc) / tl)
+                pos = (lerp(pts[i][0], pts[i + 1][0], k), lerp(pts[i][1], pts[i + 1][1], k))
+                held = carry[i]
+                break
+            acc += tl
+            if i < n:
+                if v < acc + tp:
+                    k = (v - acc) / tp
+                    pos, at = pts[i + 1], stops[i]
+                    held = carry[i] if k < 0.5 else carry[i + 1]
+                    done[i] = k >= 0.5
+                    break
+                acc += tp
+                done[i] = True
+        self.bots.append((pos, held, p, v < 1.0, ""))
+        return done, at
+
+    def walk(self, p, keys, f):
+        """Walk along a row of blocks, f = how many have been passed."""
+        f = clamp(f, 0, len(keys) - 1e-6)
+        i = int(f); k = f - i
+        a = self.stand(keys[i])
+        b = self.stand(keys[min(i + 1, len(keys) - 1)])
+        hop = ease(seg(k, 0.6, 1.0))
+        self.bots.append(((lerp(a[0], b[0], hop), lerp(a[1], b[1], hop)), None, p, True, ""))
+        return i
 
 
 # ---------------------------------------------------------------- scenes
@@ -981,7 +1024,7 @@ def scene_install(st, d, step, u, t):
     r = st.h_ram
     st.text(d, ((r[0] + r[2]) // 2, r[1] + int(26 * s)), "random", scr.f_tiny, P.INK, "ma")
     st.text(d, ((r[0] + r[2]) // 2, r[1] + int(42 * s)), "256 MB", scr.f_tiny, P.INK, "ma")
-    if step == 3:
+    if step == 3 and st.dramless:
         hm = (r[0] + int(4 * s), r[3] - int(22 * s), r[2] - int(4 * s), r[3] - int(4 * s))
         k = seg(u, 0.35, 0.5)
         if k > 0:
@@ -1523,14 +1566,19 @@ def scene_ctrl(st, d, step, u, t):
 
     # This example is a DRAM-less controller, the kind ctrltest.sh was written
     # for: no memory chip of its own, its map kept in borrowed laptop RAM.
+    # Playing live over a drive that has DRAM, it is drawn as it is.
     dr = st.dram
-    st.rr(d, dr, fill=P.BOARD, outline=P.LINE)
-    st.text(d, ((dr[0] + dr[2]) // 2, (dr[1] + dr[3]) // 2), "no DRAM chip", scr.f_tiny, P.MUTED, "mm")
     r = st.h_ram
     hm = (r[0] + int(4 * s), r[3] - int(24 * s), r[2] - int(4 * s), r[3] - int(4 * s))
-    st.rr(d, hm, fill=mix(P.PAPER, P.WARN_, 0.35))
-    st.text(d, ((hm[0] + hm[2]) // 2, (hm[1] + hm[3]) // 2), "HMB: its map", scr.f_tiny, P.INK, "mm")
-    if step == 0 and u > 0.45:
+    if not st.dramless:
+        st.rr(d, dr, fill=P.CHIP, outline=P.MUTED)
+        st.text(d, ((dr[0] + dr[2]) // 2, (dr[1] + dr[3]) // 2), "DRAM: its map", scr.f_tiny, P.INK, "mm")
+    else:
+        st.rr(d, dr, fill=P.BOARD, outline=P.LINE)
+        st.text(d, ((dr[0] + dr[2]) // 2, (dr[1] + dr[3]) // 2), "no DRAM chip", scr.f_tiny, P.MUTED, "mm")
+        st.rr(d, hm, fill=mix(P.PAPER, P.WARN_, 0.35))
+        st.text(d, ((hm[0] + hm[2]) // 2, (hm[1] + hm[3]) // 2), "HMB: its map", scr.f_tiny, P.INK, "mm")
+    if step == 0 and u > 0.45 and st.dramless:
         # the borrowed memory: a dotted line from the chip back to laptop RAM
         a = (st.ctrl[0], st.c_map[1] + (st.c_map[3] - st.c_map[1]) // 2)
         b = (hm[2], (hm[1] + hm[3]) // 2)
@@ -1719,14 +1767,35 @@ def total(beats):
     return float(sum(b[0] for b in beats))
 
 
-def frame(st, scene_i, t, paused=False):
+# ---------------------------------------------------------------- the set
+# What frame(), play() and Live need from a set of animations. This module is
+# one set (the drive tests); hwanim.py is the other and passes itself as kit.
+def make_stage(scr, pal):
+    return Stage(scr, Pal(pal))
+
+
+def backdrop(st, i):
+    return st.background(i, LABELS[SCENES[i][0]])
+
+
+def live_words(name):
+    """Live: the side panel's heading, and the note under the title."""
+    return ("THIS DRIVE, NOW",
+            "The moving parts are a picture of what the drive is doing; every figure is read from this drive.")
+
+
+KIT = sys.modules[__name__]
+
+
+def frame(st, scene_i, t, paused=False, kit=None):
     from PIL import ImageDraw
-    name, title, prog, beats = SCENES[scene_i]
-    img = st.background(scene_i, LABELS[name]).copy()
+    K = kit or KIT
+    name, title, prog, beats = K.SCENES[scene_i]
+    img = K.backdrop(st, scene_i).copy()
     d = ImageDraw.Draw(img)
     step, u = locate(beats, t)
     st.lt = u * beats[step][0]
-    DRAW[name](st, d, step, u, t)
+    K.DRAW[name](st, d, step, u, t)
     st.draw_bots(d, t)
     st.caption(d, beats[step][1], step, len(beats), u, paused)
     st.text(d, (st.scr.M + int(4 * st.s), st.H - st.scr.ftr // 2),
@@ -1736,11 +1805,12 @@ def frame(st, scene_i, t, paused=False):
 
 
 # ---------------------------------------------------------------- playing
-def play(scr, kb, pal, start="bench"):
+def play(scr, kb, pal, start="bench", kit=None):
     """Runs until Esc / Q / right-click. Moves on to the next animation when one
     finishes, so picking the first plays the whole set."""
-    st = Stage(scr, Pal(pal))
-    i = NAMES.index(start) if start in NAMES else 0
+    K = kit or KIT
+    st = K.make_stage(scr, pal)
+    i = K.NAMES.index(start) if start in K.NAMES else 0
     clock = 0.0
     last = time.time()
     paused = False
@@ -1750,11 +1820,11 @@ def play(scr, kb, pal, start="bench"):
         if not paused:
             clock += min(now - last, 0.25)     # a stall is not a reason to skip a step
         last = now
-        beats = SCENES[i][3]
+        beats = K.SCENES[i][3]
         if clock >= total(beats):
-            i = (i + 1) % len(SCENES); clock = 0.0
+            i = (i + 1) % len(K.SCENES); clock = 0.0
             continue
-        scr.fb.blit(frame(st, i, clock, paused))
+        scr.fb.blit(frame(st, i, clock, paused, K))
         spent = time.time() - now
         key, _ = kb.poll(1.0 if paused else max(0.01, 1.0 / FPS - spent))
         if key in (None, "hover", "wheelup", "wheeldown"):
@@ -1762,23 +1832,202 @@ def play(scr, kb, pal, start="bench"):
         if key in ("esc", "q", "back", "backspace"):
             break
         if key in ("right", "down", "pgdn"):
-            i = (i + 1) % len(SCENES); clock = 0.0
+            i = (i + 1) % len(K.SCENES); clock = 0.0
         elif key in ("left", "up", "pgup"):
-            i = (i - 1) % len(SCENES); clock = 0.0
+            i = (i - 1) % len(K.SCENES); clock = 0.0
         elif key in ("space", "p"):
             paused = not paused
         elif key in ("enter", "click"):
             step, _ = locate(beats, clock)
             clock = sum(b[0] for b in beats[:step + 1]) + 0.001
-        elif key and key.isdigit() and 1 <= int(key) <= len(SCENES):
+        elif key and key.isdigit() and 1 <= int(key) <= len(K.SCENES):
             i = int(key) - 1; clock = 0.0
         last = time.time()
     kb.drain()
     return "ok"
 
 
+# ---------------------------------------------------------------- live
+# The same scenes, playing while the real test runs (Ash: "i want the
+# animation show when the test is running"). The test says which scene and
+# which of its steps fit the phase it is in - the load, the rest, the
+# read-back - and those steps loop for as long as the phase lasts. Everything
+# that would be an illustration is covered: the title, the side panel and the
+# strip under the drive carry the test's own title, figures and progress bar,
+# the same lines it draws on its usual screen. Only the moving parts are a
+# picture, and the caption explains them.
+class Live:
+    def __init__(self, scr, pal, kit=None):
+        self.K = kit or KIT
+        self.st = self.K.make_stage(scr, pal)
+        self.i, self.first, self.last, self.t0 = 0, 0, 0, time.time()
+        self.fps = float(FPS)
+
+    def set(self, name, first=0, last=None, *opts):
+        # opts: "own" when the drive has DRAM of its own, "none" when it
+        # borrows laptop RAM (unknown: drawn as the DRAM-less example);
+        # "fps=N" for fewer frames - a battery drain must not be paying for a
+        # smooth picture; anything else is the scene's own (hwanim.py).
+        K = self.K
+        opts = [o for o in opts if o]
+        self.st.dramless = "own" not in opts
+        self.st.opts = opts
+        self.fps = float(FPS)
+        for o in opts:
+            if o.startswith("fps="):
+                try:
+                    self.fps = max(0.5, min(float(FPS), float(o[4:])))
+                except ValueError:
+                    pass
+        self.i = K.NAMES.index(name) if name in K.NAMES else 0
+        n = len(K.SCENES[self.i][3])
+        self.first = max(0, min(int(first), n - 1))
+        self.last = self.first if last is None else max(self.first, min(int(last), n - 1))
+        self.t0 = time.time()
+
+    def _tone(self, t):
+        P = self.st.P
+        return {"ok": P.PASS_, "warn": P.WARN_, "err": P.FAIL_,
+                "muted": P.MUTED, "accent": P.ACCENT}.get(t, P.INK)
+
+    def prepare(self, items):
+        """Before the scene is drawn - hwanim.py hands the test's figures to
+        its pictures here. The drive scenes draw from their own script."""
+
+    def frame(self, title, hint, items, now=None):
+        from PIL import ImageDraw
+        K, st, P, s = self.K, self.st, self.st.P, self.st.s
+        name, _, _, beats = K.SCENES[self.i]
+        span = beats[self.first:self.last + 1]
+        now = now if now is not None else time.time()
+        lt = (now - self.t0) % total(span)
+        step, u, acc = self.first, 0.0, 0.0
+        for k, (sec, _) in enumerate(span):
+            if lt < acc + sec:
+                step, u = self.first + k, (lt - acc) / sec
+                break
+            acc += sec
+        sec = beats[step][0]
+        t = sum(b[0] for b in beats[:step]) + u * sec
+        img = K.backdrop(st, self.i).copy()
+        d = ImageDraw.Draw(img)
+        st.lt = u * sec
+        st.clock = now - self.t0
+        self.prepare(items)
+        K.DRAW[name](st, d, step, u, t)
+        st.draw_bots(d, t)
+        self._title(d, title)
+        self._panel(d, items)
+        self._strip(d, items)
+        st.caption(d, beats[step][1], step, len(beats), u, False)
+        st.text(d, (st.scr.M + int(4 * s), st.H - st.scr.ftr // 2), hint or "",
+                st.scr.f_small, P.MUTED, "lm")
+        return img
+
+    def _title(self, d, title):
+        st, P, s = self.st, self.st.P, self.st.s
+        d.rectangle([st.ix0, st.title_y - int(8 * s), st.ix1, st.main_top - int(6 * s)], fill=P.PAPER)
+        st.text(d, (st.ix0, st.title_y), title, st.scr.f_h, P.INK)
+        st.tag(d, (st.ix1 - int(30 * s), st.title_y + int(16 * s)), "LIVE", bg=P.ACCENT)
+        st.text(d, (st.ix0, st.tabs_y + int(4 * s)), self.K.live_words(self.K.NAMES[self.i])[1],
+                st.scr.f_small, P.MUTED)
+
+    # A test with no progress bar: False covers the strip all the same (the
+    # drive scenes' strips are illustrations); hwanim.py keeps its scenes'.
+    KEEP_STRIP = False
+
+    def _keep_line(self, text, tone):
+        """Which of the test's lines go in the panel. The drive tests' plain
+        lines are explanations, and the caption has those."""
+        return tone in ("ok", "warn", "err", "accent")
+
+    def _panel_foot(self):
+        """A note at the foot of the panel, or None."""
+        return None
+
+    def _bar_label(self):
+        """What the test's progress bar measures."""
+        return "Progress of the test"
+
+    def _panel(self, d, items):
+        st, P, s = self.st, self.st.P, self.st.s
+        x0, y0, x1, y1 = st.panel
+        st.rr(d, st.panel, fill=P.PAPER, outline=P.LINE, width=max(1, int(2 * s)))
+        ix0, ix1 = x0 + int(14 * s), x1 - int(14 * s)
+        st.text(d, (ix0, y0 + int(12 * s)), self.K.live_words(self.K.NAMES[self.i])[0],
+                st.scr.f_noteb, P.INK)
+        y, lh = y0 + int(46 * s), int(26 * s)
+        def row_of(it):
+            try: return int(it[1])
+            except (TypeError, ValueError): return 99
+        bottom = y1 - int(8 * s)
+        foot = self._panel_foot()
+        if foot:
+            st.text(d, (ix0, y1 - int(10 * s)), foot, st.scr.f_tiny, P.MUTED, "ld")
+            bottom -= int(22 * s)
+        # a table (the benchmark's results) becomes one entry per row
+        head = next((i[2] for i in items if i[0] == "thead"), [])
+        rows = []
+        for it in items:
+            if it[0] == "trow" and it[2]:
+                cells = [str(c) for c in it[2]]
+                vals = ["%s %s" % (h, c) for h, c in zip(head[1:], cells[1:]) if c not in ("", "-")]
+                rows.append(("kv", it[1], cells[0], ", ".join(vals) or "waiting", ""))
+            elif it[0] in ("kv", "line"):
+                rows.append(it)
+        # Lay every entry out first. When they do not all fit, the earliest
+        # go: tests put what the drive is (chip, model) first and what it is
+        # doing now (time, temperature, errors) after, and the live figures
+        # are the ones worth the space.
+        blocks = []                           # (height, [(text, font, colour, dy)])
+        for it in sorted(rows, key=row_of):
+            if it[0] == "kv":
+                v = str(it[3])
+                f = st.scr.f_bodyb if len(v) <= 24 else st.scr.f_body   # long names smaller
+                parts = [(it[2], st.scr.f_small, P.MUTED, int(21 * s))]
+                for ln in st.wrap(d, v, f, ix1 - ix0, maxlines=2):
+                    parts.append((ln, f, self._tone(it[4] if len(it) > 4 else ""), lh))
+                blocks.append((sum(p[3] for p in parts) + int(4 * s), parts))
+            else:
+                tone = it[3] if len(it) > 3 else ""
+                if not str(it[2]).strip() or not self._keep_line(str(it[2]), tone):
+                    continue
+                parts = [(ln, st.scr.f_small, self._tone(tone), int(22 * s))
+                         for ln in st.wrap(d, str(it[2]), st.scr.f_small, ix1 - ix0, maxlines=3)]
+                blocks.append((sum(p[3] for p in parts), parts))
+        while blocks and sum(b[0] for b in blocks) > bottom - y:
+            blocks.pop(0)
+        for height, parts in blocks:
+            for text, f, col, dy in parts:
+                st.text(d, (ix0, y), text, f, col)
+                y += dy
+            y += height - sum(p[3] for p in parts)
+
+    def _strip(self, d, items):
+        st, P, s = self.st, self.st.P, self.st.s
+        x0, y0, x1, y1 = st.strip_box
+        bars = [i for i in items if i[0] == "bar"]
+        if not bars and self.KEEP_STRIP:
+            return
+        # the scene's own strip labels sit just below the box, and its callouts
+        # can hang just above it - cover from the board's edge down
+        d.rectangle([x0, y0 - int(8 * s), x1, y1 + int(7 * s)], fill=P.PAPER)
+        if not bars:
+            return
+        pct = clamp(bars[-1][2] / 100.0)
+        st.text(d, (x0, y0), self._bar_label(), st.scr.f_tiny, P.MUTED)
+        st.text(d, (x1, y0), "%d%%" % int(pct * 100), st.scr.f_tiny, P.MUTED, "ra")
+        by0, by1 = y0 + int(20 * s), y1 - int(10 * s)
+        st.rr(d, (x0, by0, x1, by1), fill=P.PAPER, outline=P.MUTED, r=int(4 * s))
+        m = max(1, int(2 * s))
+        xb = int(lerp(x0, x1, pct))
+        if xb - x0 > 2 * m + 1:
+            d.rectangle([x0 + m, by0 + m, xb - m, by1 - m], fill=P.ACCENT)
+
+
 # ---------------------------------------------------------------- standalone
-def _stage_for(w, h, theme):
+def _screen_for(w, h, theme):
+    """ui.py's screen, drawing into nothing - for checks and preview frames."""
     here = os.path.dirname(os.path.abspath(__file__))
     sys.path.insert(0, here)
     import ui
@@ -1791,7 +2040,12 @@ def _stage_for(w, h, theme):
         def blit(self, img): pass
     scr = ui.Screen(_FB())
     scr.sub = "TOSHIBA dynabook EXAMPLE\nIntel Core i5 - 16384 MB"
-    return Stage(scr, Pal(ui.anim_palette()))
+    return scr
+
+
+def _stage_for(w, h, theme):
+    scr = _screen_for(w, h, theme)
+    return Stage(scr, Pal(__import__("ui").anim_palette()))
 
 
 def _text(names):
@@ -1832,6 +2086,20 @@ def main(argv):
                         assert img.size == (w, h)
                         n += 1
                     acc += sec
+            # live mode: every step of every scene with a test's own lines over it
+            live = Live(st.scr, __import__("ui").anim_palette())
+            sample = [("kv", "10", "Time", "28 of 60 s", ""),
+                      ("kv", "13", "Temperature", "49 C now, 49 C peak (warning at 70 C)", "warn"),
+                      ("line", "15", "a long alert line that has to wrap inside the narrow panel", "err"),
+                      ("line", "16", "an explanation the caption already covers", "muted"),
+                      ("bar", "22", 46)]
+            for si, (name, _, _, beats) in enumerate(SCENES):
+                for k in range(len(beats)):
+                    live.set(name, k, k)
+                    img = live.frame("Controller check - /dev/nvme0n1", "Q = stop", sample,
+                                     now=live.t0 + beats[k][0] * 0.5)
+                    assert img.size == (w, h)
+                    n += 1
         print("ssdanim: %d frames rendered OK" % n)
         return 0
     if "--frames" in argv:

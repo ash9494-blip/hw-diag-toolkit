@@ -60,13 +60,15 @@ show_modules_screen() {
 }
 
 # ---------------------------------------------------------------- live runner
-# monitor <title> <total-seconds> <logfile> <pid> <engine>
-# Draws a live screen and returns 1 if the user aborted with Q.
+# monitor <title> <total-seconds> <logfile> <pid> <engine> <first> <last>
+# Draws a live screen and returns 1 if the user aborted with Q. The last two
+# are the steps of the RAM animation (hwanim.py) that play while it runs.
 monitor_run() {
   local title=$1 total=$2 log=$3 pid=$4 engine=$5
   local start now el pct errs last aborted=0
   start=$(date +%s)
   tui_frame "$title" "Q = stop the test    (results so far are kept)"
+  tui_anim_live ram "$6" "$7"
   while kill -0 "$pid" 2>/dev/null; do
     now=$(date +%s); el=$(( now - start ))
     pct=0; [ "$total" -gt 0 ] && pct=$(( el * 100 / total ))
@@ -139,7 +141,7 @@ test_stress() {
   stressapptest -M "$REGION_MB" -s $(( mins * 60 )) -m "$(nproc)" -W >"$log" 2>&1 &
   local pid=$!
   local aborted=0
-  monitor_run "RAM stress test - stressapptest" $(( mins * 60 )) "$log" "$pid" "stressapptest" || aborted=1
+  monitor_run "RAM stress test - stressapptest" $(( mins * 60 )) "$log" "$pid" "stressapptest" 1 3 || aborted=1
 
   local hw; hw=$(grep -ciE 'hardware error|miscompare' "$log")
   rsilent "Elapsed      : $(secs_ms "$RUN_ELAPSED")"
@@ -194,7 +196,7 @@ test_pattern() {
   # ~180 s per GB per pass is a fair estimate for the progress bar
   local est=$(( REGION_MB * passes * 180 / 1024 ))
   local aborted=0
-  monitor_run "RAM pattern test - memtester" "$est" "$log" "$pid" "memtester (estimated time)" || aborted=1
+  monitor_run "RAM pattern test - memtester" "$est" "$log" "$pid" "memtester (estimated time)" 4 4 || aborted=1
 
   rsilent "Elapsed      : $(secs_ms "$RUN_ELAPSED")"
   if [ "$aborted" = 1 ]; then
@@ -229,10 +231,12 @@ while :; do
   tui_menu "RAM tests" "a test inside the OS cannot check the memory the OS itself uses - MemTest86+ can" \
     "Memory stress test|multi-threaded, fast — random reboots and bluescreens" \
     "Memory pattern test|memtester, slow and thorough — suspect a specific bad module" \
-    "Installed modules|slot, size, speed, part and serial of every DIMM" || break
+    "Installed modules|slot, size, speed, part and serial of every DIMM" \
+    "How this test works|animated - and on to the CPU, battery, charging, USB and network tests" || break
   case "$TUI_CHOICE" in
     1) test_stress ;;
     2) test_pattern ;;
     3) show_modules_screen ;;
+    4) tui_anim ram ;;
   esac
 done

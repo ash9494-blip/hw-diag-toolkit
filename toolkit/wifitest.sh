@@ -108,16 +108,26 @@ do_scan() {   # iface -> writes SCAN_CACHE: rssi TAB freq TAB enc TAB ssid
 
 wifi_scan_progress() {   # attempt last-error
   tui_frame "Wireless - scanning" "please wait"
+  scan_rows
   tui_line 8 "Listening for access points on every channel...  (attempt $1 of 3)" muted
   [ -n "$2" ] && tui_line 10 "Last try: $(wifi_scan_explain)" warn
   tui_flush
 }
 
+# What is scanning, for the animation's panel while it listens.
+scan_rows() {
+  tui_kv 6 "Adapter" "$SCAN_IFACE"
+  tui_kv 7 "Chipset" "$SCAN_CHIP"
+}
+
 scan_screen() {
   local i=$1
+  SCAN_IFACE=$i; SCAN_CHIP=$(iface_chip "$i")
   tui_frame "Wireless - scanning" "please wait"
+  scan_rows
   tui_line 8 "Listening for access points on every channel..." muted
   tui_flush
+  tui_anim_live wifi 0 0
   if ! do_scan "$i"; then
     tui_msg "No networks found" \
       "$(wifi_scan_explain)" "" \
@@ -233,6 +243,8 @@ stability_run() {   # iface seconds
   local last_bssid; last_bssid=$(link_bssid "$i")
   FIRST_BSSID=$last_bssid
   ev INFO "watching $SSID on $i for $(human_duration "$secs"), sampling every ${SAMPLE_EVERY}s, gateway ${GATEWAY:-none}"
+  draw_stability "$i" 0 "$secs" "$(signal_dbm "$i")" "$(link_rate "$i")" ""
+  tui_anim_live wifi 2 2
 
   while [ "$t" -lt "$secs" ]; do
     bssid=$(link_bssid "$i")
@@ -316,6 +328,7 @@ internet_run() {
   tui_frame "Wireless - internet" "please wait"
   tui_line 8 "Checking DNS, reachability and throughput..." ""
   tui_flush
+  tui_anim_live wifi 4 4
 
   # DNS: time a handful of lookups the way the netprobe page does.
   local t0 t1 n ok=0 sum=0

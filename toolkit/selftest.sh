@@ -144,6 +144,7 @@ run_selftest() {   # short|long
   start=$(date +%s)
   sleep 2
   tui_frame "$label - /dev/$DISK" "Q = stop the test"
+  tui_anim_live selftest "$([ "$kind" = short ] && echo 1 || echo 2)"
   while :; do
     el=$(( $(date +%s) - start ))
     state=$(progress)

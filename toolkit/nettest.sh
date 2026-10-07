@@ -123,6 +123,7 @@ if [ "${#WIRED[@]}" -eq 0 ]; then
 elif [ "$LINK" != yes ]; then
   show "plug a cable in" "Plug a live network cable into the ethernet port." \
        "Waiting up to 30 seconds..."
+  tui_anim_live ether 0 0
   for i in $(seq 1 30); do
     for w in "${WIRED[@]}"; do
       if [ "$(cat "/sys/class/net/$w/carrier" 2>/dev/null)" = 1 ]; then
@@ -144,6 +145,7 @@ fi
 IP=""; GW=""; DNS_OK=no; PING_OK=no; DHCP=no; LOSS=""
 if [ "$LINK" = yes ]; then
   show "asking for an address" "Link is up. Requesting an address by DHCP..."
+  tui_anim_live ether 2 2
   ip addr flush dev "$IFACE" 2>/dev/null
   timeout 25 dhclient -1 -v "$IFACE" >"$RUN_DIR/dhcp.log" 2>&1
   IP=$(ip -4 -o addr show dev "$IFACE" 2>/dev/null | awk '{print $4}' | head -1)
@@ -152,6 +154,7 @@ if [ "$LINK" = yes ]; then
 
   if [ -n "$IP" ]; then
     show "testing the connection" "Address $IP" "Testing the gateway and the internet..."
+    tui_anim_live ether 3 3
     if [ -n "$GW" ]; then ping -c 2 -W 2 "$GW" >/dev/null 2>&1 && GW_OK=yes || GW_OK=no; else GW_OK=n/a; fi
     out=$(ping -c 4 -W 3 "$PING_HOST" 2>/dev/null)
     if printf '%s' "$out" | grep -q ' 0% packet loss'; then PING_OK=yes; fi

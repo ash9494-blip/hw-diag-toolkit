@@ -170,6 +170,7 @@ run_write() {   # dev total_chunks
   : > "$CURVE"
   local start; start=$(date +%s)
   ev INFO "write phase started - ${total} steps of ${CHUNK_MB} MB"
+  tui_anim_live install 1 2 "$ANIM_DRAM"     # the cache filling, the stamped steps
 
   for (( i = 0; i < total; i++ )); do
     off=$(( i * CHUNK_MB * 1024 * 1024 ))
@@ -238,6 +239,7 @@ run_write() {   # dev total_chunks
          && [ "$mbps" -lt $(( fast_sum / fast_n * 2 / 5 )) ]; then
         CLIFF_AT=$(( i * CHUNK_MB ))          # MB written when speed fell below 40%
         ev INFO "SLC cache exhausted - speed fell from $(( fast_sum / fast_n )) to $mbps MB/s; the drive is now writing to raw flash"
+        tui_anim_live install 3 3 "$ANIM_DRAM"   # past the cliff: folding into TLC
       fi
     fi
 
@@ -283,6 +285,7 @@ VERIFY_BAD=0; VERIFY_MISPLACED=0; VERIFY_DONE=0; VERIFY_ERR=""
 run_verify() {   # dev chunks
   local dev=$1 total=$2 i off got
   ev INFO "read-back phase started - checking $(hsize $(( total * CHUNK_MB )))"
+  tui_anim_live install 4 4 "$ANIM_DRAM"
   for (( i = 0; i < total; i++ )); do
     off=$(( i * CHUNK_MB * 1024 * 1024 ))
 
@@ -639,6 +642,8 @@ main() {
     APST="enabled (normal) - the drive was free to enter low-power states"
   fi
   HMB=$(hmb_state "$(nvme_ctrl "$DISK")")
+  # for the live animation: a drive given host memory has no DRAM of its own
+  ANIM_DRAM=own; [ "$HMB" != "not in use" ] && ANIM_DRAM=none
 
   # Mark where the log is now rather than clearing it: the boot-time firmware
   # messages that Driver check relies on must survive this test.

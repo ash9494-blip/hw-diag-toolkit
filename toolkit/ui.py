@@ -3305,6 +3305,44 @@ def main():
         try: os.write(fd, (str(text) + "\n").encode())
         finally: os.close(fd)
 
+    # A test's animation playing while the test runs (ssdanim.Live for the
+    # drives, hwanim.Live for the rest). It draws every frame itself, from the
+    # test's own title and lines; any screen that asks the operator something
+    # stops it first. A test can ask for fewer frames ("fps=1"): a battery
+    # drain must not pay for a smooth picture out of the pack it measures.
+    live = {"anim": None, "t": 0.0}
+
+    def live_period():
+        return 1.0 / live["anim"].fps
+
+    def anim_module(name):
+        """The set a scene belongs to. Imported on first use, so a fault in
+        an animation can only cost that screen, never the renderer's start."""
+        import hwanim
+        if name in hwanim.NAMES:
+            return hwanim
+        import ssdanim
+        return ssdanim
+
+    def live_end():
+        if live["anim"] is not None:
+            live["anim"] = None
+            scr.mode = "card"
+            if fb.cursor: fb.cursor.set_enabled(True)
+
+    def live_paint():
+        """One frame; False (and live mode ended) if the animation failed -
+        the test then shows its usual screen instead of a frozen one."""
+        try:
+            fb.blit(live["anim"].frame(scr.title, scr.hint, scr.items))
+            live["t"] = time.time()
+            return True
+        except Exception as exc:
+            import traceback
+            sys.stderr.write("ui: live animation FAILED: %s\n%s\n" % (exc, traceback.format_exc()))
+            live_end()
+            return False
+
     cmd_fd = os.open(CMD, os.O_RDONLY)
     buf = b""
     dirty = False
@@ -3316,7 +3354,8 @@ def main():
     building = None
     try:
         while True:
-            r, _, _ = select.select([cmd_fd], [], [], 0.12)
+            r, _, _ = select.select([cmd_fd], [], [],
+                                    min(0.12, live_period()) if live["anim"] is not None else 0.12)
             if r:
                 chunk = os.read(cmd_fd, 65536)
                 if not chunk:                     # writer closed; reopen
@@ -3331,9 +3370,15 @@ def main():
                     # Toolkit log and ran the fields together.
                     sys.stderr.write("> %s\n" % " | ".join(parts)[:160])
                     sys.stderr.flush()
+                # A question or a result ends a live animation: the operator
+                # must see the screen that asks, not the drive picture.
+                if live["anim"] is not None and op in (
+                        "anykey", "menu", "gridmenu", "confirm", "input", "msg", "pager",
+                        "kbtest", "ptrtest", "camtest", "tstest", "pixtest", "anim"):
+                    live_end(); dirty = True
                 # A blocking command must not sit on the keyboard while the
                 # screen still shows the previous frame.
-                if dirty and op in ("waitkey", "anykey", "menu", "confirm",
+                if dirty and live["anim"] is None and op in ("waitkey", "anykey", "menu", "confirm",
                                     "input", "msg", "pager", "kbtest", "gridmenu", "ptrtest", "camtest", "tstest",
                                     "pixtest", "anim"):
                     scr.render(); dirty = False
@@ -3385,7 +3430,25 @@ def main():
                         scr._build_fonts()
                         dirty = True
                     elif op == "flush":
-                        scr.render(); dirty = False; building = None
+                        if live["anim"] is None:
+                            scr.render()
+                        dirty = False; building = None
+                    elif op == "animlive":
+                        # scene, first step, last step, then options: "own" /
+                        # "none" (the drive's DRAM), "fps=N"
+                        name = parts[1] if len(parts) > 1 else ""
+                        mod = anim_module(name)
+                        if live["anim"] is None or live["anim"].K is not mod:
+                            live["anim"] = mod.Live(scr, anim_palette())
+                            scr.mode = "full"
+                            if fb.cursor: fb.cursor.set_enabled(False)
+                        num = lambda k, dflt: int(parts[k]) if len(parts) > k and parts[k].isdigit() else dflt
+                        live["anim"].set(name, num(2, 0), num(3, None), *parts[4:])
+                        dirty = False
+                        if not live_paint():
+                            dirty = True
+                    elif op == "animstop":
+                        live_end(); dirty = True
                     elif op == "menu":
                         entries = []
                         for e in parts[3:]:
@@ -3413,14 +3476,25 @@ def main():
                         scr.pager(kb, parts[1], parts[2]); reply("ok"); dirty = False
                     elif op == "waitkey":
                         # Keys only: a test polling for Q must neither return
-                        # early nor be stopped because the mouse moved.
+                        # early nor be stopped because the mouse moved. It
+                        # always looks at least once: "waitkey 0" used never
+                        # to poll at all, so Q could not stop the tests that
+                        # check between long steps (install simulation,
+                        # benchmark passes, the heavy controller slices).
+                        # A live animation keeps playing while it waits.
                         end = time.time() + float(parts[1])
                         name = None
-                        while time.time() < end:
-                            name, _ = kb.poll(max(0.01, end - time.time()))
-                            if name not in Keyboard.POINTER_EVENTS:
+                        while True:
+                            if live["anim"] is not None and not live_paint():
+                                dirty = True; scr.render(); dirty = False
+                            left = end - time.time()
+                            step = min(left, live_period()) if live["anim"] is not None else left
+                            name, _ = kb.poll(max(0.01, step))
+                            if name is not None and name not in Keyboard.POINTER_EVENTS:
                                 break
                             name = None
+                            if time.time() >= end:
+                                break
                         reply(name or "")
                     elif op == "camtest":
                         reply(fullscreen(camera_test, scr, kb)); dirty = True
@@ -3434,12 +3508,10 @@ def main():
                     elif op == "pixtest":
                         reply(fullscreen(pixel_test, scr, kb)); dirty = True
                     elif op == "anim":
-                        # The "how it works" animations for the drive tests.
-                        # Imported on first use, so a fault in them can only
-                        # ever cost that screen, never the renderer's start.
-                        import ssdanim
-                        reply(fullscreen(ssdanim.play, scr, kb, anim_palette(),
-                                         parts[1] if len(parts) > 1 else "")); dirty = True
+                        # The "how it works" animations: the drive tests
+                        # (ssdanim) or the rest of the machine's (hwanim).
+                        name = parts[1] if len(parts) > 1 else ""
+                        reply(fullscreen(anim_module(name).play, scr, kb, anim_palette(), name)); dirty = True
                     elif op == "ptrprobe":
                         # How many devices of a kind are there right now -
                         # lets touchpad.sh look for a driver before the test
@@ -3458,7 +3530,10 @@ def main():
                               "pixtest", "ptrprobe", "anim"):
                         reply("")
             now = time.time()
-            if dirty and now - last_paint >= 0.1 and \
+            if live["anim"] is not None:
+                if now - live["t"] >= live_period() and not live_paint():
+                    dirty = True
+            elif dirty and now - last_paint >= 0.1 and \
                     (building is None or now - building > 1.5):
                 scr.render(); dirty = False; last_paint = now; building = None
             elif not dirty and building is None:

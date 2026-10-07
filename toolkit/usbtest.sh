@@ -379,6 +379,8 @@ tui_line 7 "with its name, USB version, speed and type." ""
 tui_line 9 "Unplug it and the row changes to empty, so you can see each socket both" muted
 tui_line 10 "take and release a device. Q when you have been round every socket." muted
 tui_flush
+# the sockets drawn are the ones listed below, as they fill and empty
+tui_anim_live usb 0 2
 sleep 2
 
 # One pass over the sockets: work out what is in each one right now and update

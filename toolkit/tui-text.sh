@@ -245,9 +245,13 @@ tui_sub() { TUI_SUB=$1; }
 # The text interface has no palette or font to change.
 tui_setting() { :; }
 
+# Live animations need the framebuffer; the text screens carry on without.
+tui_anim_live() { :; }
+tui_anim_stop() { :; }
+
 # No framebuffer, no animation: the same explanation as the captions, as text.
 tui_anim() {
   local f=${RUN_DIR:-/run/diag}/how-it-works.txt
-  python3 /opt/diag/ssdanim.py --text "$1" > "$f" 2>&1
+  python3 /opt/diag/hwanim.py --text "$1" > "$f" 2>&1      # passes drive scenes to ssdanim
   tui_pager "How it works" "$f"
 }

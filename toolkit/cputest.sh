@@ -18,8 +18,11 @@ pick_duration() {
     "10 minutes|recommended when chasing a heat problem" \
     "20 minutes|thorough" \
     "30 minutes|soak test" \
-    "60 minutes|full burn-in" || return 1
-  case "$TUI_CHOICE" in 1) MINUTES=1 ;; 2) MINUTES=5 ;; 3) MINUTES=10 ;; 4) MINUTES=20 ;; 5) MINUTES=30 ;; 6) MINUTES=60 ;; esac
+    "60 minutes|full burn-in" \
+    "How this test works|animated: the load, the heat, the cooler" || return 1
+  case "$TUI_CHOICE" in 1) MINUTES=1 ;; 2) MINUTES=5 ;; 3) MINUTES=10 ;; 4) MINUTES=20 ;; 5) MINUTES=30 ;; 6) MINUTES=60 ;;
+    7) tui_anim cpu; pick_duration; return ;;
+  esac
   return 0
 }
 
@@ -40,6 +43,9 @@ run_test() {
   tui_kv 6 "CPU" "$CPU_NAME"
   tui_kv 7 "Threads" "$(cpu_threads)"
   tui_kv 8 "Sensor" "$TEMP_SRC"
+  # The animation at 2 frames a second here: drawing it at full speed would
+  # warm the very processor whose resting temperature this is.
+  tui_anim_live cpu 0 0 fps=2
   local idle_sum=0 idle_n=0 t i
   for i in 1 2 3 4 5; do
     t=$(cpu_temp_c); [ "$t" -gt 0 ] && { idle_sum=$((idle_sum+t)); idle_n=$((idle_n+1)); }
@@ -59,6 +65,7 @@ run_test() {
   local start now elapsed cur min=999 max=-1 sum=0 n=0 avg mhz thr hot=0 aborted=0 pct
   start=$(date +%s)
   tui_frame "CPU stress test - all $(cpu_threads) threads loaded" "Q = stop the test early"
+  tui_anim_live cpu 1 3
   while kill -0 $spid 2>/dev/null; do
     now=$(date +%s); elapsed=$(( now - start ))
     [ "$elapsed" -gt "$total" ] && elapsed=$total
@@ -106,6 +113,7 @@ run_test() {
   thr=$(( $(throttle_count) - thr0 ))
 
   tui_line 17 "Cooling down for 5 s..." "$MUTE"
+  tui_anim_live cpu 4 4 fps=2               # the load is off: the robots rest
   sleep 5
   local cool; cool=$(cpu_temp_c)
 
@@ -155,7 +163,8 @@ run_test() {
   rsilent "RESULT: $verdict"
   set_kv CPU_RESULT "$verdict"
 
-  if [ "$AUTO" = 1 ]; then return; fi
+  # Full run goes straight on to the next test: no result screen to end it
+  if [ "$AUTO" = 1 ]; then tui_anim_stop; return; fi
 
   tui_frame "CPU stress test finished" "Enter to go back"
   local row=6

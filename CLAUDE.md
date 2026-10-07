@@ -5,8 +5,8 @@ Bootable USB/ISO for bench-testing laptops at Data Dynamics (Johor). Owner: Ash
 minimal Ubuntu live system straight into a full-screen tile menu of hardware
 tests, and writes a per-machine report to the USB stick.
 
-**Current version: 1.16.0** (`toolkit/lib.sh` → `DIAG_VERSION`).
-Last delivered ISO: 1.15.0, SHA256 `b64bea32446eb13a44eafe23b1ae2aee8c634e397086a012d9c3104a696fb123`.
+**Current version: 1.19.0** (`toolkit/lib.sh` → `DIAG_VERSION`).
+Last delivered ISO: 1.19.0, SHA256 `b059c9b88aeaec4e1e1536530196394142aca1c59ed725c04ce3a2665c5d6d61`.
 Version history and the reasoning behind past changes: `docs/HISTORY.md`.
 
 ## Layout
@@ -28,7 +28,12 @@ toolkit/            everything that ends up in /opt/diag on the image
   drivercheck.sh    Driver check screen + per-device Fix; --quiet = scan + report
   ctrltest.sh       SSD controller check (HDD/SSD menu), read only
   ssdanim.py        "How these tests work" animations for the HDD/SSD tests
-                    (imported by ui.py on demand; --check / --text / --frames)
+                    (imported by ui.py on demand; --check / --text / --frames),
+                    and the shared engine: Canvas, frame(), play(), Live
+  hwanim.py         the same for RAM, CPU, battery, charging, USB, Wi-Fi,
+                    Ethernet; live, the drawing follows the test's own kv
+                    figures (label text matters) and shows its first plain
+                    line as the operator's instruction
   chargetest.sh     Charging test (Peripherals); writes $RUN_DIR/charge.step
   ui.py             Pillow framebuffer renderer (/dev/fb0), all screens + the
                     interactive tests (keyboard, pointer, touchscreen, camera)
@@ -121,8 +126,16 @@ radio, touchpad or battery. Say so when something is only VM-verified.
 - New tests: add to `run_test` in menu.sh and to both menu layouts (compact
   grid / peripherals submenu, and the expanded "Every test" list).
 - A drive test's behaviour is also described in `ssdanim.py` (captions and
-  the robots' moves). Change one, change the other; run
-  `python3 toolkit/ssdanim.py --check` (needs Pillow) before building.
+  the robots' moves), the other tests' in `hwanim.py`. Change one, change
+  the other; run `python3 toolkit/ssdanim.py --check` and `hwanim.py
+  --check` (need Pillow) before building. hwanim reads a test's figures by
+  their kv labels ("Temperature now", "Charger", "Cable"...): renaming a
+  label in a script silently stops the picture following it.
+- Live animations: `tui_anim_live scene first last [fps=N]` once per phase
+  (each call restarts the loop), never inside the redraw loop. A phase that
+  ends without a question or result screen (Full run's AUTO mode) must call
+  `tui_anim_stop`. Keep the frame rate low where drawing would skew the
+  reading (battery drain fps=1, CPU idle baseline fps=2).
 - Target machines run mawk, not gawk: no `strtonum`, `and()`, `gensub`.
 - Ioctl numbers/struct offsets: compile a C probe against `/usr/include/linux`
   headers — hand calculations were wrong several times.
@@ -176,6 +189,13 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   `timeout N` instead. Never `2>/dev/null` a network tool; log it.
 - `iw link` shows the SSID before the WPA handshake completes; use
   `wifi_wpa_state` (wpa_cli) for "connected".
+- A USB-C power supply's `online` and `typec/portN-partner` are the UCSI
+  driver's memory of the port's last event; the A40-J never reported an
+  unplug (1.18.0: "charger connected" with nothing plugged in). For "is a
+  charger in", trust the Mains flag (`_PSR`, re-read every time), and the
+  battery status as a cross-check - see `plugged()` in chargetest.sh.
+- An animation must never draw its example figures live: a missing kv
+  figure is "no reading" (the A40-J's USB-C step showed the example's 62 %).
 - Never space-pad columns for the renderer (proportional font): pass menu
   cells as `name|col|col` or use `tui_thead`/`tui_trow`.
 

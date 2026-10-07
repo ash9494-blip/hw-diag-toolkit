@@ -101,6 +101,7 @@ run_cdm() {
     for run in $(seq 1 "$RUNS"); do
       tui_line 13 "${PROF_NAME[$i]}  -  read pass, run $run of $RUNS" "$WRN"
       tui_bar 15 $(( done * 100 / total ))
+      tui_anim_live bench $(( i + 1 ))       # this profile, playing while it runs
       res=$(fio_pass "$rrw" "${PROF_BS[$i]}" "${PROF_QD[$i]}" "$target" "$TEST_SIZE")
       done=$((done+1))
       if [ "$res" != ERR ] && [ -n "$res" ]; then
@@ -113,6 +114,7 @@ run_cdm() {
       if [ "$dowrite" = 1 ]; then
         tui_line 13 "${PROF_NAME[$i]}  -  write pass, run $run of $RUNS" "$WRN"
         tui_bar 15 $(( done * 100 / total ))
+        tui_anim_live bench 5
         res=$(fio_pass "$wrw" "${PROF_BS[$i]}" "${PROF_QD[$i]}" "$target" "$TEST_SIZE")
         done=$((done+1))
         if [ "$res" != ERR ] && [ -n "$res" ]; then
@@ -131,10 +133,9 @@ run_cdm() {
         fi
         if ! disk_alive "$DEV"; then dropped=1; break 2; fi
       fi
-      if [ -t 0 ]; then
-        IFS= read -rsn1 -t 0.01 k 2>/dev/null
-        case "$k" in q|Q) aborted=1; break 2 ;; esac
-      fi
+      # Q comes from the renderer, which owns the keyboard; reading stdin
+      # here never saw it.
+      tui_wait_abort 0 && { aborted=1; break 2; }
     done
   done
   if [ "$dropped" = 1 ]; then
@@ -674,6 +675,7 @@ test_surface() {
   local pid=$! start now el pct aborted=0
   start=$(date +%s)
   tui_frame "Surface read scan - /dev/$DISK" "Q = stop the scan"
+  tui_anim_live surface 1 3
   while kill -0 $pid 2>/dev/null; do
     now=$(date +%s); el=$(( now - start ))
     pct=$(tr '\r' '\n' < "$log" | grep -oE '[0-9]+\.[0-9]+% done' | tail -1 | cut -d. -f1)
