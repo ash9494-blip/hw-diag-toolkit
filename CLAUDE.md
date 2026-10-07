@@ -5,8 +5,8 @@ Bootable USB/ISO for bench-testing laptops at Data Dynamics (Johor). Owner: Ash
 minimal Ubuntu live system straight into a full-screen tile menu of hardware
 tests, and writes a per-machine report to the USB stick.
 
-**Current version: 1.19.0** (`toolkit/lib.sh` → `DIAG_VERSION`).
-Last delivered ISO: 1.19.0, SHA256 `b059c9b88aeaec4e1e1536530196394142aca1c59ed725c04ce3a2665c5d6d61`.
+**Current version: 1.20.0** (`toolkit/lib.sh` → `DIAG_VERSION`).
+Last delivered ISO: 1.20.0, SHA256 `2b386ec50d6082c43250fc09f69cb6001122e5e876752ef5e3440fab584c8f5f`.
 Version history and the reasoning behind past changes: `docs/HISTORY.md`.
 
 ## Layout
@@ -35,8 +35,16 @@ toolkit/            everything that ends up in /opt/diag on the image
                     figures (label text matters) and shows its first plain
                     line as the operator's instruction
   chargetest.sh     Charging test (Peripherals); writes $RUN_DIR/charge.step
+  netcheck.sh       network checks shared by nettest.sh / wifitest.sh (sourced):
+                    every check bound to the adapter under test, nc_cause
+  errlog.sh         Hardware error log: kernel-log fault rules (--quiet in Full run)
+  sdtest.sh         SD card reader; lidtest.sh lid + tablet-mode switch
+  swstate.py        input switch states (lid, tablet, jacks) via EVIOCGSW
   ui.py             Pillow framebuffer renderer (/dev/fb0), all screens + the
                     interactive tests (keyboard, pointer, touchscreen, camera)
+  skins.py          the anime themes (mecha, kawaii): ui.py hands header,
+                    card, grid, menus, badges, bars to it when SKIN is set;
+                    --check / --shots DIR (the build runs --check)
   *test.sh etc      one script per test
   icons/            Ash's 24x24 PNG icon set (alpha used as a stencil)
 test/               QEMU harness: boot-vm.sh, screenshot, keystrokes, QMP touch
@@ -136,6 +144,16 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   ends without a question or result screen (Full run's AUTO mode) must call
   `tui_anim_stop`. Keep the frame rate low where drawing would skew the
   reading (battery drain fps=1, CPU idle baseline fps=2).
+- Network checks go out of the adapter under test (`ping -I`, `curl
+  --interface`, DNS on a socket bound with SO_BINDTODEVICE) - use
+  `netcheck.sh`, never a bare `ping`/`getent`: with Wi-Fi and a cable both
+  up, an unbound check tests whichever link the route picks. A fault past
+  the router is the network's (`NC_SIDE=network`) and must not fail the
+  laptop's port.
+- Tests the operator acts on write a step file for the VM harness
+  (`charge.step`, `lid.step`, `sound.step` in `$RUN_DIR`): QEMU has no
+  charger, lid or jack, so a guest script fakes them (test_power, uinput)
+  in step with the test.
 - Target machines run mawk, not gawk: no `strtonum`, `and()`, `gensub`.
 - Ioctl numbers/struct offsets: compile a C probe against `/usr/include/linux`
   headers — hand calculations were wrong several times.
@@ -182,6 +200,13 @@ radio, touchpad or battery. Say so when something is only VM-verified.
 - No i915 means Intel sound (SOF / HDA, 6th gen+) waits forever for it and
   makes no sound card ("init of i915 and HDMI codec failed", deferred probe).
   `snd_hda_core gpu_bind=0` (/etc/modprobe.d/diag-audio.conf) - never remove.
+- Kernel debugfs/sysfs text pads with TABs (`timing spec:\t2 (sd
+  high-speed)`): split on `:[ \t]*`, not `: *`. A TAB in a tui value used to
+  blank the field (the protocol's separator); `_s` in tui.sh now turns TABs
+  and newlines into spaces, but parse cleanly anyway.
+- ui.py runs as `__main__` on the image: never look it up as
+  `sys.modules["ui"]` (the checks import it as "ui", so only the VM shows
+  the miss) - go through the screen object, `type(scr).__module__`.
 - nvme-cli 2.8 JSON: plain numbers, temperatures in Kelvin, `psds[]` with
   `entry_lat`/`exit_lat`/`non-operational_state`. get-feature 0x0c errors on
   drives without APST - only ask when `apsta` is 1.
@@ -198,8 +223,26 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   figure is "no reading" (the A40-J's USB-C step showed the example's 62 %).
 - Never space-pad columns for the renderer (proportional font): pass menu
   cells as `name|col|col` or use `tui_thead`/`tui_trow`.
+- Skins (mecha, kawaii) draw the same rows, card box and header height as
+  the other themes - never move a position in a skin. A new item kind in
+  `render()` falls through to `scr._draw_item` and gets the plain look; a new
+  card-level element (badge-like, bar-like) needs a drawer in skins.py too.
+  Look at both skins at 1024x768 and 150 % text (`skins.py --shots DIR`).
 
 ## Open items
+
+- **1.20 needs real-hardware checks** (VM-tested with fakes only):
+  - Wi-Fi per-antenna signal and retries on the AX201: does iwlwifi put
+    chains in `iw station dump`?
+  - the SD reader on a Realtek rtsx slot (bus mode from debugfs)
+  - the lid and tablet switches on a Dynabook
+  - the headphone jack on SOF (the A40-J) - does the switch report, and does
+    sound move to the headphones without PulseAudio?
+  - the PROCHOT MSR read
+  - the error log's rules against a real faulty machine
+  - the anime themes (mecha, kawaii) on a real panel: VM-checked at
+    1280x800 (switch, home, menus, live CPU test), the rest rendered
+    offscreen at 1024x768-1920x1080 and 150 % text
 
 - **1.15 needs real-hardware checks**: A40-J sound with gpu_bind=0 (and the
   legacy-HDA fallback, never exercised); controller-check wake timing (QEMU
@@ -221,8 +264,9 @@ radio, touchpad or battery. Say so when something is only VM-verified.
 - WinPE companion ISO for SetDmiAll (Ash is installing the Windows ADK + WinPE
   add-on): build script not yet written. It must take the path to Ash's own
   extracted SetDmiAll folder; TVALZ.sys needs Secure Boot off.
-- Ideas raised but not built: fan RPM, keyboard LED test, idle gaps inside
-  the install simulation.
+- Ideas raised but not built: fan RPM (check `sensors` on real models
+  first), keyboard LED test, Bluetooth scan, Windows 11 readiness (TPM),
+  idle gaps inside the install simulation.
 
 ## Delivering to Ash
 

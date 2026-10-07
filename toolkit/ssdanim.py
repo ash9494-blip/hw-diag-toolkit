@@ -255,7 +255,8 @@ class Canvas:
         d = ImageDraw.Draw(img)
         scr._draw_header(img, d)
         scr._card(d)
-        self.text(d, (self.ix0, self.title_y), "How it works - " + scenes[scene_i][1], scr.f_h, P.INK)
+        self.title_text(d, (self.ix0, self.title_y), "How it works - " + scenes[scene_i][1],
+                        right=self.ix1 - int(110 * s))
         self.text(d, (self.ix1, self.title_y + int(6 * s)),
                   "%d of %d" % (scene_i + 1, len(scenes)), scr.f_small, P.MUTED, "ra")
         # the tabs: where this one sits among the rest
@@ -354,6 +355,35 @@ class Canvas:
         x = (box[0] + box[2]) // 2
         y = box[1] - int(5 * s) if above else box[3] + int(5 * s)
         self.text(d, (x, y), text, self.scr.f_tiny, col or self.P.ACCENT, "md" if above else "ma")
+
+    def _skin(self):
+        """ui.py's active skin (the 1.20 anime themes), or (None, None).
+        The module is found through the screen object: on the image ui.py is
+        the program, "__main__", and a lookup of "ui" by name found nothing -
+        the checks import it as "ui", so only the VM showed the plain title."""
+        U = sys.modules.get(type(self.scr).__module__)
+        sk = getattr(U, "SKIN", None) if U is not None else None
+        return (U, sk) if sk else (None, None)
+
+    def title_text(self, d, xy, text, right=None):
+        """The screen title: in a skinned theme, in that skin's own face and
+        with the rule its card titles carry, running to `right`."""
+        U, sk = self._skin()
+        if sk:
+            # through the cached text path: this is drawn every frame
+            f, caps = U.skins.anim_title_style(self.scr, U)
+            t = text.upper() if caps else text
+            self.text(d, xy, t, f, self.P.INK)
+            if right is not None:
+                U.skins.anim_title_rule(self.scr, U, d, f, xy, t, right)
+            return
+        self.text(d, xy, text, self.scr.f_h, self.P.INK)
+
+    def live_tag(self, d, xy, text="LIVE"):
+        U, sk = self._skin()
+        if sk:
+            return U.skins.anim_tag(self.scr, U, d, xy, text)
+        self.tag(d, xy, text, bg=self.P.ACCENT)
 
     def tag(self, d, xy, text, fg=None, bg=None, f=None):
         """A small filled label, for callouts on the diagram."""
@@ -1927,8 +1957,8 @@ class Live:
     def _title(self, d, title):
         st, P, s = self.st, self.st.P, self.st.s
         d.rectangle([st.ix0, st.title_y - int(8 * s), st.ix1, st.main_top - int(6 * s)], fill=P.PAPER)
-        st.text(d, (st.ix0, st.title_y), title, st.scr.f_h, P.INK)
-        st.tag(d, (st.ix1 - int(30 * s), st.title_y + int(16 * s)), "LIVE", bg=P.ACCENT)
+        st.title_text(d, (st.ix0, st.title_y), title, right=st.ix1 - int(80 * s))
+        st.live_tag(d, (st.ix1 - int(30 * s), st.title_y + int(16 * s)))
         st.text(d, (st.ix0, st.tabs_y + int(4 * s)), self.K.live_words(self.K.NAMES[self.i])[1],
                 st.scr.f_small, P.MUTED)
 
@@ -2076,7 +2106,7 @@ def main(argv):
         # theme - the build runs this so a broken animation stops the build
         # instead of the toolkit on a customer's machine
         n = 0
-        for th in ("light", "dark", "contrast"):
+        for th in ("light", "dark", "contrast", "mecha", "kawaii"):
             st = _stage_for(w, h, th)
             for si, (_, _, _, beats) in enumerate(SCENES):
                 acc = 0.0

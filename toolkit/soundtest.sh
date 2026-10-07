@@ -193,6 +193,99 @@ elif [ "$LEFT_ANS" = both ] || [ "$RIGHT_ANS" = both ]; then
   SPK_STATE=WARN; SPK_NOTE="a tone meant for one side came out of both"
 fi
 
+# ---------------------------------------------------------------- headphone jack
+# The jack is its own part: the socket wears, and its plug-detect switch
+# sticks - sound then stays on the speakers with headphones in, or the
+# speakers stay silent after they come out. The switch is read like the
+# lid's (swstate.py), or from the codec's "Headphone Jack" control; a codec
+# that reports neither still gets the listening test.
+HP_STATE=SKIP; HP_NOTE="not tested"; HP_DET=""; HP_IN=""; HP_OUT=""; HP_L=""; HP_R=""
+
+hp_state() {   # -> in | out | "" (nothing reports the jack)
+  local v c
+  v=$(python3 /opt/diag/swstate.py headphone 2>/dev/null | head -1 | cut -f4)
+  case "$v" in 1) echo in; return ;; 0) echo out; return ;; esac
+  for c in $(awk '/^ *[0-9]+ \[/{print $1}' /proc/asound/cards 2>/dev/null); do
+    v=$(amixer -c "$c" cget iface=CARD,name='Headphone Jack' 2>/dev/null | sed -n 's/.*: values=//p')
+    case "$v" in on) echo in; return ;; off) echo out; return ;; esac
+  done
+}
+
+hp_wait() {   # want seconds -> 0 once the jack reads it, 1 timed out, 2 skipped
+  local t
+  printf 'hp-%s\n' "$1" > "$RUN_DIR/sound.step"   # what is wanted - the VM harness reads it
+  for (( t = 0; t < $2 * 2; t++ )); do
+    [ "$(hp_state)" = "$1" ] && return 0
+    _ask waitkey 0.5
+    case "$(printf '%s' "$UI_ANS" | tr '[:upper:]' '[:lower:]')" in q|s) return 2 ;; esac
+  done
+  return 1
+}
+
+# Where a tone was heard -> EAR. Not called inside $( ): the menu talks to
+# the renderer and its answer must land in this shell.
+hp_ear() {   # title
+  EAR=none
+  tui_menu "$1" "" \
+    "Left ear|" "Right ear|" "Both ears|" "Nothing at all|" \
+    "From the laptop's speakers|not the headphones" || return 0
+  case "$TUI_CHOICE" in 1) EAR=left ;; 2) EAR=right ;; 3) EAR=both ;; 4) EAR=none ;; *) EAR=speakers ;; esac
+}
+
+if tui_menu "Headphone jack" "a pair of headphones or earphones to hand?" \
+     "Test the headphone jack|plug headphones in - the socket and its plug-detect switch" \
+     "Skip|no headphones to hand" && [ "$TUI_CHOICE" = 1 ]; then
+  HP_DET=$(hp_state)
+  if [ "$HP_DET" = out ]; then
+    tui_frame "Sound test - headphone jack" "S = skip"
+    tui_line 6 "Plug the headphones into the headphone jack." ""
+    tui_line 8 "The jack's plug-detect switch should notice within a second." muted
+    tui_flush
+    hp_wait in 30; case $? in 0) HP_IN=yes ;; 1) HP_IN=no ;; *) HP_IN=skipped ;; esac
+  else
+    [ "$HP_DET" = in ] && HP_IN="already in"
+    tui_msg "Headphone jack" "Plug the headphones in, then press Enter." \
+      "$( [ -z "$HP_DET" ] && echo "(This codec does not report the jack, so only your ears can tell.)")"
+  fi
+  if [ "$HP_IN" != skipped ]; then
+    tui_frame "Sound test - headphone jack" "playing the LEFT channel"
+    tui_line 6 "Playing a tone on the LEFT channel - listen in the headphones." ""; tui_flush
+    play "$RUN_DIR/tone_l.wav"; sleep 0.3
+    hp_ear "Where did that tone come from?"; HP_L=$EAR
+    tui_frame "Sound test - headphone jack" "playing the RIGHT channel"
+    tui_line 6 "Playing a different tone on the RIGHT channel." ""; tui_flush
+    play "$RUN_DIR/tone_r.wav"; sleep 0.3
+    hp_ear "And that one?"; HP_R=$EAR
+    if [ -n "$HP_DET" ]; then
+      tui_frame "Sound test - headphone jack" "S = skip"
+      tui_line 6 "Now take the headphones out." ""
+      tui_line 8 "The sound should go back to the speakers." muted
+      tui_flush
+      hp_wait out 30; case $? in 0) HP_OUT=yes ;; 1) HP_OUT=no ;; *) HP_OUT=skipped ;; esac
+    fi
+
+    HP_STATE=PASS; HP_NOTE="both ears, and plug-in and removal noticed"
+    [ -z "$HP_DET" ] && HP_NOTE="both ears (this codec does not report plug-in)"
+    if [ "$HP_L" = speakers ] || [ "$HP_R" = speakers ]; then
+      HP_STATE=FAIL
+      HP_NOTE="sound stayed on the speakers with headphones in - the jack's plug-detect switch"
+    elif [ "$HP_L" = none ] && [ "$HP_R" = none ]; then
+      HP_STATE=FAIL; HP_NOTE="nothing in either ear - try another pair; if still silent, the jack"
+    elif [ "$HP_L" = none ] || [ "$HP_R" = none ]; then
+      HP_STATE=FAIL
+      HP_NOTE="the $( [ "$HP_L" = none ] && echo left || echo right ) ear is silent - try another pair; if the same, a worn jack contact"
+    elif [ "$HP_L" = right ] && [ "$HP_R" = left ]; then
+      HP_STATE=FAIL; HP_NOTE="left and right are swapped in the jack"
+    elif [ "$HP_IN" = no ]; then
+      HP_STATE=WARN; HP_NOTE="sound reaches the headphones, but plugging in was not reported"
+    elif [ "$HP_OUT" = no ]; then
+      HP_STATE=WARN; HP_NOTE="removing the headphones was not noticed - the speakers may stay muted"
+    elif [ "$HP_L" = both ] || [ "$HP_R" = both ]; then
+      HP_STATE=WARN; HP_NOTE="a tone meant for one ear came out of both"
+    fi
+  fi
+fi
+
 # ---------------------------------------------------------------- microphone
 MIC_STATE=SKIP; MIC_NOTE="not tested"; PEAK=0; RMS=0
 if have arecord && arecord -l 2>/dev/null | grep -q '^card'; then
@@ -243,6 +336,8 @@ rsilent ""
 rsilent "Left tone heard   : $LEFT_ANS"
 rsilent "Right tone heard  : $RIGHT_ANS"
 rsilent "Speakers          : $SPK_STATE - $SPK_NOTE"
+rsilent "Headphone jack    : $HP_STATE - $HP_NOTE"
+[ "$HP_STATE" != SKIP ] && rsilent "  heard: left tone $HP_L, right tone $HP_R; plug-in ${HP_IN:-not reported}, removal ${HP_OUT:-not reported}"
 rsilent "Microphone        : $MIC_STATE - $MIC_NOTE"
 [ "$PEAK" -gt 0 ] && rsilent "Recorded level    : peak ${PEAK} %   average ${RMS} %"
 rsilent ""
@@ -258,6 +353,14 @@ case "$SPK_STATE:$MIC_STATE" in
   *:WARN)    STATE=WARN; HEADLINE="speakers are fine, but the microphone $MIC_NOTE" ;;
   *:SKIP)    STATE=PART; HEADLINE="speakers pass; this machine has no microphone to test" ;;
   *)         STATE=PASS; HEADLINE="speakers and microphone both good" ;;
+esac
+# The jack is named on its own: "FAIL (speakers are fine...)" for a dead jack
+# would send the repair to the wrong part.
+case "$HP_STATE" in
+  FAIL) if [ "$STATE" = FAIL ]; then HEADLINE="$HEADLINE; headphone jack: $HP_NOTE"
+        else STATE=FAIL; HEADLINE="headphone jack: $HP_NOTE"; fi ;;
+  WARN) if [ "$STATE" = PASS ] || [ "$STATE" = PART ]; then STATE=WARN; HEADLINE="headphone jack: $HP_NOTE"; fi ;;
+  PASS) [ "$STATE" = PASS ] && HEADLINE="speakers, headphone jack and microphone all good" ;;
 esac
 case "$STATE" in
   FAIL) VERDICT="FAIL ($HEADLINE)" ;;
@@ -283,7 +386,9 @@ if [ "$MIC_STATE" != SKIP ]; then
   tui_kv 12 "Recorded peak" "${PEAK} % of full scale" \
     "$([ "${PEAK:-0}" -ge 2 ] 2>/dev/null && echo ok || echo err)"
 fi
-tui_line 14 "Speakers: $SPK_NOTE" "$([ "$SPK_STATE" = PASS ] && echo ok || echo err)"
-tui_line 15 "Microphone: $MIC_NOTE" "$([ "$MIC_STATE" = PASS ] && echo ok || echo err)"
+tui_kv 13 "Headphone jack" "$HP_STATE" "$(case "$HP_STATE" in PASS) echo ok ;; SKIP) echo muted ;; FAIL) echo err ;; *) echo warn ;; esac)"
+tui_line 15 "Speakers: $SPK_NOTE" "$([ "$SPK_STATE" = PASS ] && echo ok || echo err)"
+tui_line 16 "Headphones: $HP_NOTE" "$(case "$HP_STATE" in PASS) echo ok ;; SKIP) echo muted ;; FAIL) echo err ;; *) echo warn ;; esac)"
+tui_line 17 "Microphone: $MIC_NOTE" "$([ "$MIC_STATE" = PASS ] && echo ok || echo err)"
 tui_flush
 tui_anykey

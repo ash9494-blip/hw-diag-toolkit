@@ -66,6 +66,15 @@ for f in /usr/share/fonts/truetype/crosextra/Carlito-Regular.ttf \
   [ -f "$C$f" ] || { echo "BUILD ABORTED - font missing from the image: $f" >&2; exit 1; }
 done
 echo "fonts present: Carlito + DejaVu Sans Mono"
+# The display faces of the two anime themes (skins.py): Bebas Neue for the
+# mecha deck, Comfortaa for the kawaii sticker sheet (both OFL, universe).
+chroot $C apt-get install -y --no-install-recommends fonts-bebas-neue fonts-comfortaa 2>&1 | tail -1
+for f in /usr/share/fonts/opentype/bebas-neue/BebasNeue-Bold.otf \
+         /usr/share/fonts/opentype/bebas-neue/BebasNeue-Regular.otf \
+         /usr/share/fonts/truetype/comfortaa/Comfortaa-Bold.ttf; do
+  [ -f "$C$f" ] || { echo "BUILD ABORTED - theme font missing from the image: $f" >&2; exit 1; }
+done
+echo "theme fonts present: Bebas Neue + Comfortaa"
 
 # ---- wifi firmware ----
 # linux-firmware whole is 651 MB, nearly all of it GPUs and devices a repair
@@ -149,6 +158,20 @@ chmod +x $C/opt/diag/*.sh $C/opt/diag/*.py
 n=$(ls $C/opt/diag/icons/*.png 2>/dev/null | wc -l)
 [ "$n" -ge 19 ] || { echo "BUILD ABORTED - only $n icon files reached the image" >&2; exit 1; }
 echo "icons installed: $n"
+# When this image was made: the clock check (netcheck.sh) calls a hardware
+# clock set before this date wrong even with no internet to compare against.
+date -u +%s > $C/opt/diag/build-epoch
+# Every script parses. A typo in a test only shows when that tile is chosen
+# on the bench - by then the stick is in a customer's laptop.
+for f in $C/opt/diag/*.sh; do
+  bash -n "$f" || { echo "BUILD ABORTED - syntax error in ${f##*/}" >&2; exit 1; }
+done
+for f in $C/opt/diag/*.py; do
+  chroot $C python3 -m py_compile "/opt/diag/${f##*/}" \
+    || { echo "BUILD ABORTED - ${f##*/} does not compile" >&2; exit 1; }
+done
+rm -rf $C/opt/diag/__pycache__
+echo "scripts parse: $(ls $C/opt/diag/*.sh | wc -l) shell, $(ls $C/opt/diag/*.py | wc -l) python"
 
 # Actually start the renderer against a file-backed framebuffer.
 #
@@ -201,6 +224,14 @@ if ! chroot $C env DIAG_RUN=/tmp/animcheck python3 /opt/diag/hwanim.py --check >
   exit 1
 fi
 cat /tmp/animcheck.out
+# The two anime themes draw every screen themselves (skins.py): the home grid,
+# a menu, a test card and a confirm, at four panel sizes and 150 % text.
+if ! chroot $C env DIAG_RUN=/tmp/skincheck python3 /opt/diag/skins.py --check > /tmp/skincheck.out 2>&1; then
+  echo "BUILD ABORTED - the anime themes failed to render:" >&2
+  tail -12 /tmp/skincheck.out >&2
+  exit 1
+fi
+cat /tmp/skincheck.out
 
 # ---- autologin on tty1 and serial ----
 mkdir -p $C/etc/systemd/system/getty@tty1.service.d

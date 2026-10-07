@@ -26,6 +26,31 @@ pick_duration() {
   return 0
 }
 
+# A processor can be held at 400-800 MHz while staying cool: the board
+# asserts PROCHOT ("BD PROCHOT") when it distrusts the power - a charger it
+# does not accept, a failing battery, a faulty sensor. The machine is then
+# painfully slow, yet a temperature-only verdict passed it. So the clock
+# under load is compared with the processor's base clock.
+base_mhz() {   # the rated base clock, or nothing
+  local b; b=$(cat /sys/devices/system/cpu/cpu0/cpufreq/base_frequency 2>/dev/null)
+  [ -n "$b" ] && { echo $(( b / 1000 )); return; }
+  cpu_model | sed -n 's/.*@ *\([0-9.]*\) *GHz.*/\1/p' | awk '$1 > 0 {printf "%d", $1 * 1000}'
+}
+
+# Intel only: IA32_THERM_STATUS (MSR 0x19c) bit 2 is "PROCHOT# or FORCEPR#
+# asserted by another agent on the platform" - the board, not the chip's own
+# heat. Read only; /dev/cpu/N/msr comes from the msr module.
+prochot() {   # -> active | clear | nothing when it cannot be read
+  [ "$PH_OK" = 1 ] || return 1
+  python3 - <<'PY' 2>/dev/null
+import os, struct
+fd = os.open("/dev/cpu/0/msr", os.O_RDONLY)
+v = struct.unpack("<Q", os.pread(fd, 8, 0x19C))[0]
+os.close(fd)
+print("active" if v >> 2 & 1 else "clear")
+PY
+}
+
 temp_colour() {
   if   [ "$1" -ge 95 ]; then printf '%s' "$ERR$B"
   elif [ "$1" -ge 85 ]; then printf '%s' "$WRN"
@@ -55,8 +80,10 @@ run_test() {
   done
   local idle_temp=-1
   [ "$idle_n" -gt 0 ] && idle_temp=$(( idle_sum / idle_n ))
-  local idle_mhz thr0
+  local idle_mhz thr0 ph=0 phn=0
   idle_mhz=$(cpu_mhz); thr0=$(throttle_count)
+  PH_OK=0
+  grep -q GenuineIntel /proc/cpuinfo && modprobe msr 2>/dev/null && [ -r /dev/cpu/0/msr ] && PH_OK=1
 
   # ---- load ----
   stress-ng --cpu 0 --cpu-method all --metrics-brief --times -t "${total}s" >"$STRESS_OUT" 2>&1 &
@@ -70,6 +97,7 @@ run_test() {
     now=$(date +%s); elapsed=$(( now - start ))
     [ "$elapsed" -gt "$total" ] && elapsed=$total
     cur=$(cpu_temp_c); mhz=$(cpu_mhz); thr=$(( $(throttle_count) - thr0 ))
+    case "$(prochot)" in active) ph=$((ph+1)); phn=$((phn+1)) ;; clear) phn=$((phn+1)) ;; esac
     if [ "$cur" -gt 0 ]; then
       sum=$(( sum + cur )); n=$(( n + 1 ))
       [ "$cur" -lt "$min" ] && min=$cur
@@ -117,6 +145,26 @@ run_test() {
   sleep 5
   local cool; cool=$(cpu_temp_c)
 
+  # ---- held back? ----
+  # Only samples taken below 85 C count: a hot chip slowing itself down is
+  # the cooling fault judged below, not this one. BD PROCHOT pins the clock
+  # at 400-800 MHz, while even a tight power limit on battery leaves well
+  # over half the base clock - hence the low line.
+  local load_mhz base held=no phtxt="" power
+  load_mhz=$(awk -F, 'NR > 1 && $3 > 0 && ($2 == "" || $2 < 85) {s += $3; c++} END {if (c >= 3) printf "%d", s / c}' "$SAMPLE_LOG")
+  base=$(base_mhz)
+  if [ -n "$load_mhz" ] && [ -n "$base" ] && [ "$aborted" != 1 ] \
+     && [ "$load_mhz" -lt 1200 ] && [ $(( load_mhz * 100 / base )) -lt 45 ]; then
+    held=yes
+  fi
+  [ "$phn" -gt 0 ] && phtxt=$( [ "$ph" -gt 0 ] && echo "asserted in $ph of $phn samples" || echo "never asserted")
+  # the firmware's AC flag only - a USB-C port's can be stale (chargetest.sh)
+  local p; power="on battery"
+  [ -z "$(ls /sys/class/power_supply 2>/dev/null)" ] && power="power source not reported"
+  for p in /sys/class/power_supply/*; do
+    [ "$(cat "$p/type" 2>/dev/null)" = Mains ] && [ "$(cat "$p/online" 2>/dev/null)" = 1 ] && power="on the charger"
+  done
+
   # ---- report ----
   rsection "CPU STRESS TEST"
   rsilent "CPU            : $CPU_NAME"
@@ -137,6 +185,9 @@ run_test() {
     set_kv CPU_TEMP_MAX "n/a"
   fi
   rsilent "Clock idle / end             : ${idle_mhz} MHz / ${mhz} MHz"
+  rsilent "Clock under load, while cool : ${load_mhz:-not measured}${load_mhz:+ MHz}   (base clock ${base:-not reported}${base:+ MHz})"
+  [ -n "$phtxt" ] && rsilent "PROCHOT from the board       : $phtxt"
+  rsilent "Power during the test        : $power"
   rsilent "Thermal throttle events      : $thr"
   set_kv CPU_THROTTLE_EVENTS "$thr"
   rsilent ""
@@ -160,6 +211,13 @@ run_test() {
   else
     state=PASS; verdict="PASS (peak ${max} C)"
   fi
+  # Cool but crawling outranks a temperature pass - and an unknown sensor.
+  if [ "$held" = yes ] && [ "$state" != ABORT ] && [ "$aborted" != 2 ]; then
+    state=HELD; verdict="FAIL (held at ${load_mhz} MHz under load while cool - base clock ${base} MHz)"
+    rsilent "Held back: the processor ran at ${load_mhz} MHz under full load without being hot."
+    rsilent "  The board is slowing it (BD PROCHOT$( [ "$ph" -gt 0 ] && echo ", seen asserted")) - usually a charger"
+    rsilent "  it does not accept, a failing battery or a faulty sensor. Test was run $power."
+  fi
   rsilent "RESULT: $verdict"
   set_kv CPU_RESULT "$verdict"
 
@@ -173,9 +231,18 @@ run_test() {
     WARN)    tui_badge $row MARGINAL "runs hot, throttling likely under sustained load" ;;
     FAIL)    tui_badge $row FAIL "overheating - clean the fan and heatsink, repaste" ;;
     ABORT)   tui_badge $row STOPPED "cancelled before the end" ;;
+    HELD)    tui_badge $row FAIL "held back by the board - slow while cool" ;;
     *)       tui_badge $row UNKNOWN "no temperature sensor was readable" ;;
   esac
   row=$((row+2))
+  if [ "$state" = HELD ]; then
+    tui_kv $row "Clock under load" "$load_mhz MHz while cool - base clock $base MHz" err; row=$((row+1))
+    [ -n "$phtxt" ] && { tui_kv $row "PROCHOT" "$phtxt" "$( [ "$ph" -gt 0 ] && echo err || echo "" )"; row=$((row+1)); }
+    row=$((row+1))
+    row=$(tui_para $row "The board is telling the processor to slow down (BD PROCHOT). Usually a charger it does not accept (wrong wattage or not genuine), a failing battery, or a faulty sensor. Run it again with the original charger, then on battery alone: if it is slow both ways, suspect the board's sensor or the battery connector. Tested $power." "")
+    tui_anykey "ENTER to go back"
+    return
+  fi
   tui_kv $row "Duration" "$(secs_ms "$dur")"; row=$((row+1))
   if [ "$n" -gt 0 ]; then
     tui_kv $row "Idle before"  "${idle_temp} C"; row=$((row+1))

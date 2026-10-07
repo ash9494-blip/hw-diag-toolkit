@@ -1,0 +1,1523 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-07T11:34:41+00:00",
+  "title": "Design System: Hardware Diagnostic Toolkit",
+  "extensions": {
+    "colorMeta": {
+      "light-ground": {
+        "role": "neutral",
+        "displayName": "Light Ground",
+        "canonical": "rgb(234, 238, 244)",
+        "source": "ui.THEMES[\"light\"].GROUND",
+        "tonalRamp": [
+          "#090b0f",
+          "#212429",
+          "#3d4045",
+          "#5a5e63",
+          "#7a7d83",
+          "#9b9fa4",
+          "#c0c4ca",
+          "#ebeff5"
+        ]
+      },
+      "light-paper": {
+        "role": "neutral",
+        "displayName": "Light Paper",
+        "canonical": "rgb(255, 255, 255)",
+        "source": "ui.THEMES[\"light\"].PAPER",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#242424",
+          "#404040",
+          "#5d5d5d",
+          "#7d7d7d",
+          "#9e9e9e",
+          "#c4c4c4",
+          "#eeeeee"
+        ]
+      },
+      "light-ink": {
+        "role": "neutral",
+        "displayName": "Light Ink",
+        "canonical": "rgb(17, 23, 32)",
+        "source": "ui.THEMES[\"light\"].INK",
+        "tonalRamp": [
+          "#060b14",
+          "#1e242e",
+          "#39404b",
+          "#575e69",
+          "#767e8a",
+          "#979fab",
+          "#bcc5d2",
+          "#e6effd"
+        ]
+      },
+      "light-muted": {
+        "role": "neutral",
+        "displayName": "Light Muted",
+        "canonical": "rgb(106, 118, 132)",
+        "source": "ui.THEMES[\"light\"].MUTED",
+        "tonalRamp": [
+          "#040c16",
+          "#1b2530",
+          "#36414d",
+          "#535f6c",
+          "#727f8d",
+          "#93a0af",
+          "#b8c6d5",
+          "#e2f0ff"
+        ]
+      },
+      "light-line": {
+        "role": "neutral",
+        "displayName": "Light Line",
+        "canonical": "rgb(226, 232, 241)",
+        "source": "ui.THEMES[\"light\"].LINE",
+        "tonalRamp": [
+          "#080b11",
+          "#20242b",
+          "#3b4047",
+          "#595e66",
+          "#787e86",
+          "#999fa7",
+          "#bfc5cd",
+          "#e9eff8"
+        ]
+      },
+      "light-accent": {
+        "role": "primary",
+        "displayName": "Light Accent",
+        "canonical": "rgb(47, 109, 246)",
+        "source": "ui.THEMES[\"light\"].ACCENT",
+        "tonalRamp": [
+          "#00003c",
+          "#020089",
+          "#0025ae",
+          "#124dd4",
+          "#3371fb",
+          "#5395ff",
+          "#77bdff",
+          "#c4eeff"
+        ]
+      },
+      "light-pass": {
+        "role": "verdict",
+        "displayName": "Light Pass",
+        "canonical": "rgb(15, 122, 79)",
+        "source": "ui.THEMES[\"light\"].PASS_",
+        "tonalRamp": [
+          "#001600",
+          "#00320d",
+          "#005029",
+          "#007046",
+          "#329165",
+          "#58b485",
+          "#7fdbaa",
+          "#aaffd4"
+        ]
+      },
+      "light-pass-soft": {
+        "role": "verdict",
+        "displayName": "Light Pass Soft",
+        "canonical": "rgb(230, 244, 237)",
+        "source": "ui.THEMES[\"light\"].PASS_SOFT",
+        "tonalRamp": [
+          "#050d09",
+          "#1c2722",
+          "#37433d",
+          "#55615b",
+          "#74817b",
+          "#95a29c",
+          "#bac8c1",
+          "#e4f2eb"
+        ]
+      },
+      "light-warn": {
+        "role": "verdict",
+        "displayName": "Light Warn",
+        "canonical": "rgb(154, 100, 0)",
+        "source": "ui.THEMES[\"light\"].WARN_",
+        "tonalRamp": [
+          "#250000",
+          "#441300",
+          "#643100",
+          "#855000",
+          "#a7701a",
+          "#cb9243",
+          "#f3b86a",
+          "#ffe294"
+        ]
+      },
+      "light-warn-soft": {
+        "role": "verdict",
+        "displayName": "Light Warn Soft",
+        "canonical": "rgb(253, 241, 221)",
+        "source": "ui.THEMES[\"light\"].WARN_SOFT",
+        "tonalRamp": [
+          "#110a00",
+          "#2b2313",
+          "#483e2e",
+          "#665c4b",
+          "#867c6a",
+          "#a89d8a",
+          "#cec3af",
+          "#f9edd9"
+        ]
+      },
+      "light-fail": {
+        "role": "verdict",
+        "displayName": "Light Fail",
+        "canonical": "rgb(192, 52, 47)",
+        "source": "ui.THEMES[\"light\"].FAIL_",
+        "tonalRamp": [
+          "#2d0000",
+          "#600000",
+          "#850000",
+          "#ab1c1d",
+          "#d2463e",
+          "#f96a5f",
+          "#ff9183",
+          "#ffcfc3"
+        ]
+      },
+      "light-fail-soft": {
+        "role": "verdict",
+        "displayName": "Light Fail Soft",
+        "canonical": "rgb(251, 234, 234)",
+        "source": "ui.THEMES[\"light\"].FAIL_SOFT",
+        "tonalRamp": [
+          "#120808",
+          "#2c2021",
+          "#493c3c",
+          "#685a5a",
+          "#887979",
+          "#aa9a9a",
+          "#d0c0c0",
+          "#fbeaea"
+        ]
+      },
+      "light-shadow": {
+        "role": "neutral",
+        "displayName": "Light Shadow",
+        "canonical": "rgb(208, 215, 226)",
+        "source": "ui.THEMES[\"light\"].SHADOW",
+        "tonalRamp": [
+          "#070b12",
+          "#1f242c",
+          "#3a4049",
+          "#585e67",
+          "#777e88",
+          "#989fa9",
+          "#bec5cf",
+          "#e8effa"
+        ]
+      },
+      "dark-ground": {
+        "role": "neutral",
+        "displayName": "Dark Ground",
+        "canonical": "rgb(15, 20, 27)",
+        "source": "ui.THEMES[\"dark\"].GROUND",
+        "tonalRamp": [
+          "#070b12",
+          "#1f242c",
+          "#3a4048",
+          "#585e67",
+          "#777e87",
+          "#989fa9",
+          "#bdc5cf",
+          "#e8effa"
+        ]
+      },
+      "dark-paper": {
+        "role": "neutral",
+        "displayName": "Dark Paper",
+        "canonical": "rgb(26, 33, 44)",
+        "source": "ui.THEMES[\"dark\"].PAPER",
+        "tonalRamp": [
+          "#060b15",
+          "#1d2430",
+          "#38404c",
+          "#565e6b",
+          "#757e8c",
+          "#969fad",
+          "#bbc5d4",
+          "#e5efff"
+        ]
+      },
+      "dark-ink": {
+        "role": "neutral",
+        "displayName": "Dark Ink",
+        "canonical": "rgb(228, 234, 243)",
+        "source": "ui.THEMES[\"dark\"].INK",
+        "tonalRamp": [
+          "#080b11",
+          "#20242b",
+          "#3b4047",
+          "#595e66",
+          "#787e86",
+          "#999fa7",
+          "#bfc5cd",
+          "#e9eff8"
+        ]
+      },
+      "dark-muted": {
+        "role": "neutral",
+        "displayName": "Dark Muted",
+        "canonical": "rgb(140, 153, 170)",
+        "source": "ui.THEMES[\"dark\"].MUTED",
+        "tonalRamp": [
+          "#040b17",
+          "#1a2532",
+          "#35414f",
+          "#535f6e",
+          "#727e8f",
+          "#93a0b1",
+          "#b8c5d7",
+          "#e2f0ff"
+        ]
+      },
+      "dark-line": {
+        "role": "neutral",
+        "displayName": "Dark Line",
+        "canonical": "rgb(44, 55, 71)",
+        "source": "ui.THEMES[\"dark\"].LINE",
+        "tonalRamp": [
+          "#040b18",
+          "#1a2434",
+          "#354051",
+          "#525e70",
+          "#727e91",
+          "#929fb3",
+          "#b7c5d9",
+          "#e1f0ff"
+        ]
+      },
+      "dark-accent": {
+        "role": "primary",
+        "displayName": "Dark Accent",
+        "canonical": "rgb(96, 158, 255)",
+        "source": "ui.THEMES[\"dark\"].ACCENT",
+        "tonalRamp": [
+          "#00003c",
+          "#00146d",
+          "#003890",
+          "#1d59b4",
+          "#3f7bd9",
+          "#609dfe",
+          "#84c4ff",
+          "#bef1ff"
+        ]
+      },
+      "dark-pass": {
+        "role": "verdict",
+        "displayName": "Dark Pass",
+        "canonical": "rgb(74, 212, 149)",
+        "source": "ui.THEMES[\"dark\"].PASS_",
+        "tonalRamp": [
+          "#001600",
+          "#003602",
+          "#005520",
+          "#00753e",
+          "#00975d",
+          "#24ba7d",
+          "#5ae1a2",
+          "#a4ffd2"
+        ]
+      },
+      "dark-pass-soft": {
+        "role": "verdict",
+        "displayName": "Dark Pass Soft",
+        "canonical": "rgb(22, 52, 41)",
+        "source": "ui.THEMES[\"dark\"].PASS_SOFT",
+        "tonalRamp": [
+          "#001008",
+          "#0c2a20",
+          "#29473b",
+          "#466559",
+          "#668678",
+          "#86a799",
+          "#abcdbf",
+          "#d5f8e9"
+        ]
+      },
+      "dark-warn": {
+        "role": "verdict",
+        "displayName": "Dark Warn",
+        "canonical": "rgb(240, 187, 78)",
+        "source": "ui.THEMES[\"dark\"].WARN_",
+        "tonalRamp": [
+          "#210000",
+          "#421400",
+          "#623300",
+          "#835300",
+          "#a57300",
+          "#c8951a",
+          "#f0bb4e",
+          "#ffe78d"
+        ]
+      },
+      "dark-warn-soft": {
+        "role": "verdict",
+        "displayName": "Dark Warn Soft",
+        "canonical": "rgb(59, 46, 18)",
+        "source": "ui.THEMES[\"dark\"].WARN_SOFT",
+        "tonalRamp": [
+          "#140900",
+          "#2e2205",
+          "#4b3e22",
+          "#6a5c3f",
+          "#8a7b5e",
+          "#ac9d7e",
+          "#d2c2a2",
+          "#fdedcc"
+        ]
+      },
+      "dark-fail": {
+        "role": "verdict",
+        "displayName": "Dark Fail",
+        "canonical": "rgb(255, 122, 112)",
+        "source": "ui.THEMES[\"dark\"].FAIL_",
+        "tonalRamp": [
+          "#2d0000",
+          "#5c0000",
+          "#810002",
+          "#a62726",
+          "#cd4c46",
+          "#f37066",
+          "#ff968b",
+          "#ffcfc4"
+        ]
+      },
+      "dark-fail-soft": {
+        "role": "verdict",
+        "displayName": "Dark Fail Soft",
+        "canonical": "rgb(63, 29, 28)",
+        "source": "ui.THEMES[\"dark\"].FAIL_SOFT",
+        "tonalRamp": [
+          "#1d0203",
+          "#3a1818",
+          "#593432",
+          "#795250",
+          "#9b716f",
+          "#be928f",
+          "#e5b7b4",
+          "#ffe1de"
+        ]
+      },
+      "dark-shadow": {
+        "role": "neutral",
+        "displayName": "Dark Shadow",
+        "canonical": "rgb(10, 14, 19)",
+        "source": "ui.THEMES[\"dark\"].SHADOW",
+        "tonalRamp": [
+          "#080b10",
+          "#20242a",
+          "#3b4046",
+          "#595e65",
+          "#787e85",
+          "#999fa6",
+          "#bfc5cc",
+          "#e9eff7"
+        ]
+      },
+      "contrast-ground": {
+        "role": "neutral",
+        "displayName": "Contrast Ground",
+        "canonical": "rgb(0, 0, 0)",
+        "source": "ui.THEMES[\"contrast\"].GROUND",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#242424",
+          "#404040",
+          "#5d5d5d",
+          "#7d7d7d",
+          "#9e9e9e",
+          "#c4c4c4",
+          "#eeeeee"
+        ]
+      },
+      "contrast-paper": {
+        "role": "neutral",
+        "displayName": "Contrast Paper",
+        "canonical": "rgb(22, 22, 22)",
+        "source": "ui.THEMES[\"contrast\"].PAPER",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#242424",
+          "#404040",
+          "#5d5d5d",
+          "#7d7d7d",
+          "#9e9e9e",
+          "#c4c4c4",
+          "#eeeeee"
+        ]
+      },
+      "contrast-ink": {
+        "role": "neutral",
+        "displayName": "Contrast Ink",
+        "canonical": "rgb(255, 255, 255)",
+        "source": "ui.THEMES[\"contrast\"].INK",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#242424",
+          "#404040",
+          "#5d5d5d",
+          "#7d7d7d",
+          "#9e9e9e",
+          "#c4c4c4",
+          "#eeeeee"
+        ]
+      },
+      "contrast-muted": {
+        "role": "neutral",
+        "displayName": "Contrast Muted",
+        "canonical": "rgb(200, 200, 200)",
+        "source": "ui.THEMES[\"contrast\"].MUTED",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#242424",
+          "#404040",
+          "#5d5d5d",
+          "#7d7d7d",
+          "#9e9e9e",
+          "#c4c4c4",
+          "#eeeeee"
+        ]
+      },
+      "contrast-line": {
+        "role": "neutral",
+        "displayName": "Contrast Line",
+        "canonical": "rgb(255, 255, 255)",
+        "source": "ui.THEMES[\"contrast\"].LINE",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#242424",
+          "#404040",
+          "#5d5d5d",
+          "#7d7d7d",
+          "#9e9e9e",
+          "#c4c4c4",
+          "#eeeeee"
+        ]
+      },
+      "contrast-accent": {
+        "role": "primary",
+        "displayName": "Contrast Accent",
+        "canonical": "rgb(255, 214, 0)",
+        "source": "ui.THEMES[\"contrast\"].ACCENT",
+        "tonalRamp": [
+          "#1b0400",
+          "#401800",
+          "#5e3700",
+          "#7e5700",
+          "#a07800",
+          "#c29a00",
+          "#e9c100",
+          "#ffee8d"
+        ]
+      },
+      "contrast-pass": {
+        "role": "verdict",
+        "displayName": "Contrast Pass",
+        "canonical": "rgb(0, 255, 120)",
+        "source": "ui.THEMES[\"contrast\"].PASS_",
+        "tonalRamp": [
+          "#001500",
+          "#003a00",
+          "#005b00",
+          "#007d00",
+          "#00a009",
+          "#00c43d",
+          "#00ec66",
+          "#b3ffc4"
+        ]
+      },
+      "contrast-pass-soft": {
+        "role": "verdict",
+        "displayName": "Contrast Pass Soft",
+        "canonical": "rgb(0, 48, 24)",
+        "source": "ui.THEMES[\"contrast\"].PASS_SOFT",
+        "tonalRamp": [
+          "#001201",
+          "#002d15",
+          "#1e4a30",
+          "#3d694d",
+          "#5c896c",
+          "#7dab8d",
+          "#a2d2b2",
+          "#ccfddc"
+        ]
+      },
+      "contrast-warn": {
+        "role": "verdict",
+        "displayName": "Contrast Warn",
+        "canonical": "rgb(255, 214, 0)",
+        "source": "ui.THEMES[\"contrast\"].WARN_",
+        "tonalRamp": [
+          "#1b0400",
+          "#401800",
+          "#5e3700",
+          "#7e5700",
+          "#a07800",
+          "#c29a00",
+          "#e9c100",
+          "#ffee8d"
+        ]
+      },
+      "contrast-warn-soft": {
+        "role": "verdict",
+        "displayName": "Contrast Warn Soft",
+        "canonical": "rgb(56, 46, 0)",
+        "source": "ui.THEMES[\"contrast\"].WARN_SOFT",
+        "tonalRamp": [
+          "#130900",
+          "#2d2300",
+          "#4a3f14",
+          "#685e33",
+          "#887d52",
+          "#aa9f72",
+          "#d0c597",
+          "#fbefc0"
+        ]
+      },
+      "contrast-fail": {
+        "role": "verdict",
+        "displayName": "Contrast Fail",
+        "canonical": "rgb(255, 80, 80)",
+        "source": "ui.THEMES[\"contrast\"].FAIL_",
+        "tonalRamp": [
+          "#2d0000",
+          "#690000",
+          "#900000",
+          "#b70011",
+          "#df2e36",
+          "#ff5857",
+          "#ff827c",
+          "#ffcfc6"
+        ]
+      },
+      "contrast-fail-soft": {
+        "role": "verdict",
+        "displayName": "Contrast Fail Soft",
+        "canonical": "rgb(64, 0, 0)",
+        "source": "ui.THEMES[\"contrast\"].FAIL_SOFT",
+        "tonalRamp": [
+          "#280000",
+          "#480704",
+          "#692820",
+          "#8c473d",
+          "#af665c",
+          "#d3877c",
+          "#fcada0",
+          "#ffd7c9"
+        ]
+      },
+      "contrast-shadow": {
+        "role": "neutral",
+        "displayName": "Contrast Shadow",
+        "canonical": "rgb(0, 0, 0)",
+        "source": "ui.THEMES[\"contrast\"].SHADOW",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#242424",
+          "#404040",
+          "#5d5d5d",
+          "#7d7d7d",
+          "#9e9e9e",
+          "#c4c4c4",
+          "#eeeeee"
+        ]
+      },
+      "mecha-ground": {
+        "role": "neutral",
+        "displayName": "Console Black",
+        "canonical": "rgb(11, 11, 13)",
+        "source": "ui.THEMES[\"mecha\"].GROUND",
+        "tonalRamp": [
+          "#0b0b0d",
+          "#242426",
+          "#3f3f42",
+          "#5d5d60",
+          "#7d7d80",
+          "#9e9ea1",
+          "#c4c4c7",
+          "#eeeef1"
+        ]
+      },
+      "mecha-paper": {
+        "role": "neutral",
+        "displayName": "Plate",
+        "canonical": "rgb(22, 22, 26)",
+        "source": "ui.THEMES[\"mecha\"].PAPER",
+        "tonalRamp": [
+          "#0b0b0e",
+          "#232428",
+          "#3f3f44",
+          "#5d5d62",
+          "#7d7d82",
+          "#9e9ea3",
+          "#c3c3c9",
+          "#eeeef4"
+        ]
+      },
+      "mecha-ink": {
+        "role": "neutral",
+        "displayName": "Bone",
+        "canonical": "rgb(236, 236, 232)",
+        "source": "ui.THEMES[\"mecha\"].INK",
+        "tonalRamp": [
+          "#0b0b09",
+          "#242421",
+          "#40403d",
+          "#5e5e5a",
+          "#7d7d7a",
+          "#9f9f9b",
+          "#c4c4c0",
+          "#efefeb"
+        ]
+      },
+      "mecha-muted": {
+        "role": "neutral",
+        "displayName": "Steel",
+        "canonical": "rgb(150, 150, 160)",
+        "source": "ui.THEMES[\"mecha\"].MUTED",
+        "tonalRamp": [
+          "#0b0a11",
+          "#23232b",
+          "#3f3f47",
+          "#5d5d66",
+          "#7c7c86",
+          "#9d9da7",
+          "#c3c3cd",
+          "#ededf8"
+        ]
+      },
+      "mecha-line": {
+        "role": "neutral",
+        "displayName": "Gunmetal",
+        "canonical": "rgb(62, 62, 72)",
+        "source": "ui.THEMES[\"mecha\"].LINE",
+        "tonalRamp": [
+          "#0a0a12",
+          "#23232c",
+          "#3f3f49",
+          "#5c5c67",
+          "#7c7c87",
+          "#9d9da9",
+          "#c3c3cf",
+          "#ededfa"
+        ]
+      },
+      "mecha-accent": {
+        "role": "primary",
+        "displayName": "Signal Orange",
+        "canonical": "rgb(255, 106, 0)",
+        "source": "ui.THEMES[\"mecha\"].ACCENT",
+        "tonalRamp": [
+          "#2c0000",
+          "#640000",
+          "#8a0000",
+          "#b01600",
+          "#d74400",
+          "#ff6a00",
+          "#ff9244",
+          "#ffd5ab"
+        ]
+      },
+      "mecha-pass": {
+        "role": "verdict",
+        "displayName": "Nominal Green",
+        "canonical": "rgb(57, 217, 138)",
+        "source": "ui.THEMES[\"mecha\"].PASS_",
+        "tonalRamp": [
+          "#001600",
+          "#003700",
+          "#00570e",
+          "#007830",
+          "#009a4f",
+          "#00bd70",
+          "#49e495",
+          "#a9ffcd"
+        ]
+      },
+      "mecha-pass-soft": {
+        "role": "verdict",
+        "displayName": "Mecha Pass Soft",
+        "canonical": "rgb(14, 50, 34)",
+        "source": "ui.THEMES[\"mecha\"].PASS_SOFT",
+        "tonalRamp": [
+          "#001105",
+          "#062b1c",
+          "#254837",
+          "#436754",
+          "#628774",
+          "#83a994",
+          "#a8cfba",
+          "#d2fae4"
+        ]
+      },
+      "mecha-warn": {
+        "role": "verdict",
+        "displayName": "Amber",
+        "canonical": "rgb(255, 196, 0)",
+        "source": "ui.THEMES[\"mecha\"].WARN_",
+        "tonalRamp": [
+          "#1f0100",
+          "#460f00",
+          "#663000",
+          "#875100",
+          "#aa7200",
+          "#cd9400",
+          "#f5ba00",
+          "#ffe98d"
+        ]
+      },
+      "mecha-warn-soft": {
+        "role": "verdict",
+        "displayName": "Mecha Warn Soft",
+        "canonical": "rgb(58, 46, 0)",
+        "source": "ui.THEMES[\"mecha\"].WARN_SOFT",
+        "tonalRamp": [
+          "#140900",
+          "#2e2300",
+          "#4b3f13",
+          "#6a5d32",
+          "#8a7d51",
+          "#ac9e72",
+          "#d2c496",
+          "#fdeebf"
+        ]
+      },
+      "mecha-fail": {
+        "role": "verdict",
+        "displayName": "Alarm Red",
+        "canonical": "rgb(255, 92, 80)",
+        "source": "ui.THEMES[\"mecha\"].FAIL_",
+        "tonalRamp": [
+          "#2d0000",
+          "#660000",
+          "#8d0000",
+          "#b40007",
+          "#db3831",
+          "#ff6053",
+          "#ff8878",
+          "#ffcfc2"
+        ]
+      },
+      "mecha-fail-soft": {
+        "role": "verdict",
+        "displayName": "Mecha Fail Soft",
+        "canonical": "rgb(70, 16, 14)",
+        "source": "ui.THEMES[\"mecha\"].FAIL_SOFT",
+        "tonalRamp": [
+          "#240000",
+          "#440e0c",
+          "#642c27",
+          "#864a44",
+          "#a96a63",
+          "#cd8b83",
+          "#f5b0a8",
+          "#ffdad1"
+        ]
+      },
+      "mecha-shadow": {
+        "role": "neutral",
+        "displayName": "Mecha Shadow",
+        "canonical": "rgb(0, 0, 0)",
+        "source": "ui.THEMES[\"mecha\"].SHADOW",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#242424",
+          "#404040",
+          "#5d5d5d",
+          "#7d7d7d",
+          "#9e9e9e",
+          "#c4c4c4",
+          "#eeeeee"
+        ]
+      },
+      "kawaii-ground": {
+        "role": "neutral",
+        "displayName": "Blush",
+        "canonical": "rgb(255, 228, 238)",
+        "source": "ui.THEMES[\"kawaii\"].GROUND",
+        "tonalRamp": [
+          "#15060c",
+          "#301d25",
+          "#4e3941",
+          "#6d565f",
+          "#8d767f",
+          "#af97a0",
+          "#d6bcc6",
+          "#ffe6f0"
+        ]
+      },
+      "kawaii-paper": {
+        "role": "neutral",
+        "displayName": "Sticker White",
+        "canonical": "rgb(255, 255, 255)",
+        "source": "ui.THEMES[\"kawaii\"].PAPER",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#242424",
+          "#404040",
+          "#5d5d5d",
+          "#7d7d7d",
+          "#9e9e9e",
+          "#c4c4c4",
+          "#eeeeee"
+        ]
+      },
+      "kawaii-ink": {
+        "role": "neutral",
+        "displayName": "Plum",
+        "canonical": "rgb(59, 33, 66)",
+        "source": "ui.THEMES[\"kawaii\"].INK",
+        "tonalRamp": [
+          "#16011c",
+          "#311838",
+          "#4f3456",
+          "#6e5176",
+          "#8f7197",
+          "#b192b9",
+          "#d7b7e0",
+          "#ffe1ff"
+        ]
+      },
+      "kawaii-muted": {
+        "role": "neutral",
+        "displayName": "Mauve",
+        "canonical": "rgb(118, 86, 126)",
+        "source": "ui.THEMES[\"kawaii\"].MUTED",
+        "tonalRamp": [
+          "#17001e",
+          "#33163a",
+          "#503258",
+          "#705078",
+          "#906f99",
+          "#b390bb",
+          "#d9b5e2",
+          "#ffdfff"
+        ]
+      },
+      "kawaii-line": {
+        "role": "neutral",
+        "displayName": "Pink Outline",
+        "canonical": "rgb(246, 186, 210)",
+        "source": "ui.THEMES[\"kawaii\"].LINE",
+        "tonalRamp": [
+          "#20000e",
+          "#3e1127",
+          "#5e2d43",
+          "#7e4b61",
+          "#a16a81",
+          "#c48ba2",
+          "#ecb0c8",
+          "#ffdaf3"
+        ]
+      },
+      "kawaii-accent": {
+        "role": "primary",
+        "displayName": "Sticker Violet",
+        "canonical": "rgb(108, 74, 240)",
+        "source": "ui.THEMES[\"kawaii\"].ACCENT",
+        "tonalRamp": [
+          "#0e003a",
+          "#2e008d",
+          "#4200b2",
+          "#5b30d8",
+          "#7759ff",
+          "#967eff",
+          "#b9a6ff",
+          "#e6e3ff"
+        ]
+      },
+      "kawaii-pass": {
+        "role": "verdict",
+        "displayName": "Mint",
+        "canonical": "rgb(16, 124, 88)",
+        "source": "ui.THEMES[\"kawaii\"].PASS_",
+        "tonalRamp": [
+          "#001601",
+          "#003214",
+          "#005030",
+          "#00704d",
+          "#30916c",
+          "#56b38c",
+          "#7edab1",
+          "#a8ffdb"
+        ]
+      },
+      "kawaii-pass-soft": {
+        "role": "verdict",
+        "displayName": "Kawaii Pass Soft",
+        "canonical": "rgb(222, 247, 236)",
+        "source": "ui.THEMES[\"kawaii\"].PASS_SOFT",
+        "tonalRamp": [
+          "#000f09",
+          "#152921",
+          "#30453c",
+          "#4e635a",
+          "#6d837a",
+          "#8da59b",
+          "#b3cbc0",
+          "#dcf5ea"
+        ]
+      },
+      "kawaii-warn": {
+        "role": "verdict",
+        "displayName": "Honey Brown (WARN text on white)",
+        "canonical": "rgb(160, 92, 0)",
+        "source": "ui.THEMES[\"kawaii\"].WARN_",
+        "tonalRamp": [
+          "#280000",
+          "#490800",
+          "#6a2b00",
+          "#8d4a00",
+          "#b06b1d",
+          "#d48c45",
+          "#fdb26b",
+          "#ffdd98"
+        ]
+      },
+      "kawaii-warn-soft": {
+        "role": "verdict",
+        "displayName": "Kawaii Warn Soft",
+        "canonical": "rgb(255, 240, 214)",
+        "source": "ui.THEMES[\"kawaii\"].WARN_SOFT",
+        "tonalRamp": [
+          "#130900",
+          "#2d220d",
+          "#4a3e28",
+          "#695c45",
+          "#897b64",
+          "#aa9d84",
+          "#d1c2a9",
+          "#fcedd3"
+        ]
+      },
+      "kawaii-fail": {
+        "role": "verdict",
+        "displayName": "Cherry",
+        "canonical": "rgb(200, 32, 60)",
+        "source": "ui.THEMES[\"kawaii\"].FAIL_",
+        "tonalRamp": [
+          "#2d0000",
+          "#650000",
+          "#8c000a",
+          "#b3002b",
+          "#da364a",
+          "#ff5e6a",
+          "#ff868f",
+          "#ffcece"
+        ]
+      },
+      "kawaii-fail-soft": {
+        "role": "verdict",
+        "displayName": "Kawaii Fail Soft",
+        "canonical": "rgb(255, 226, 232)",
+        "source": "ui.THEMES[\"kawaii\"].FAIL_SOFT",
+        "tonalRamp": [
+          "#16050a",
+          "#321d22",
+          "#4f393e",
+          "#6e565b",
+          "#8f757b",
+          "#b1969c",
+          "#d8bcc2",
+          "#ffe6ec"
+        ]
+      },
+      "kawaii-shadow": {
+        "role": "neutral",
+        "displayName": "Backing Paper (SHADOW role)",
+        "canonical": "rgb(217, 204, 255)",
+        "source": "ui.THEMES[\"kawaii\"].SHADOW",
+        "tonalRamp": [
+          "#0f0225",
+          "#281b42",
+          "#443761",
+          "#615581",
+          "#8175a3",
+          "#a296c6",
+          "#c8bbed",
+          "#f3e5ff"
+        ]
+      },
+      "mecha-skin-bar": {
+        "role": "skin",
+        "displayName": "Mecha Skin Bar",
+        "canonical": "rgb(18, 18, 22)",
+        "source": "skins.MECHA[\"BAR\"]",
+        "tonalRamp": [
+          "#0b0b0e",
+          "#232328",
+          "#3f3f44",
+          "#5d5d62",
+          "#7d7d82",
+          "#9e9ea3",
+          "#c3c3c9",
+          "#eeeef4"
+        ]
+      },
+      "mecha-skin-haz-a": {
+        "role": "skin",
+        "displayName": "Mecha Skin Haz A",
+        "canonical": "rgb(255, 196, 0)",
+        "source": "skins.MECHA[\"HAZ_A\"]",
+        "tonalRamp": [
+          "#1f0100",
+          "#460f00",
+          "#663000",
+          "#875100",
+          "#aa7200",
+          "#cd9400",
+          "#f5ba00",
+          "#ffe98d"
+        ]
+      },
+      "mecha-skin-haz-b": {
+        "role": "skin",
+        "displayName": "Mecha Skin Haz B",
+        "canonical": "rgb(17, 17, 19)",
+        "source": "skins.MECHA[\"HAZ_B\"]",
+        "tonalRamp": [
+          "#0b0b0d",
+          "#242426",
+          "#3f3f42",
+          "#5d5d60",
+          "#7d7d80",
+          "#9e9ea1",
+          "#c4c4c7",
+          "#eeeef1"
+        ]
+      },
+      "mecha-skin-tab": {
+        "role": "skin",
+        "displayName": "Mecha Skin Tab",
+        "canonical": "rgb(40, 40, 47)",
+        "source": "skins.MECHA[\"TAB\"]",
+        "tonalRamp": [
+          "#0b0a10",
+          "#23232a",
+          "#3f3f46",
+          "#5d5d65",
+          "#7c7c85",
+          "#9d9da6",
+          "#c3c3cc",
+          "#ededf7"
+        ]
+      },
+      "mecha-skin-text-on": {
+        "role": "skin",
+        "displayName": "Mecha Skin Text On",
+        "canonical": "rgb(11, 11, 13)",
+        "source": "skins.MECHA[\"TEXT_ON\"]",
+        "tonalRamp": [
+          "#0b0b0d",
+          "#242426",
+          "#3f3f42",
+          "#5d5d60",
+          "#7d7d80",
+          "#9e9ea1",
+          "#c4c4c7",
+          "#eeeef1"
+        ]
+      },
+      "kawaii-skin-band": {
+        "role": "skin",
+        "displayName": "Kawaii Skin Band",
+        "canonical": "rgb(255, 199, 222)",
+        "source": "skins.KAWAII[\"BAND\"]",
+        "tonalRamp": [
+          "#1e000e",
+          "#3c1327",
+          "#5b2f43",
+          "#7c4d62",
+          "#9e6c81",
+          "#c18da3",
+          "#e9b2c9",
+          "#ffdcf3"
+        ]
+      },
+      "kawaii-skin-backing": {
+        "role": "neutral",
+        "displayName": "Backing Paper",
+        "canonical": "rgb(217, 204, 255)",
+        "source": "skins.KAWAII[\"BACKING\"]",
+        "tonalRamp": [
+          "#0f0225",
+          "#281b42",
+          "#443761",
+          "#615581",
+          "#8175a3",
+          "#a296c6",
+          "#c8bbed",
+          "#f3e5ff"
+        ]
+      },
+      "kawaii-skin-sel-edge": {
+        "role": "skin",
+        "displayName": "Kawaii Skin Sel Edge",
+        "canonical": "rgb(80, 48, 214)",
+        "source": "skins.KAWAII[\"SEL_EDGE\"]",
+        "tonalRamp": [
+          "#0c003b",
+          "#29008f",
+          "#3b00b4",
+          "#5335da",
+          "#6e5cff",
+          "#8c81ff",
+          "#afaaff",
+          "#e0e5ff"
+        ]
+      },
+      "kawaii-skin-chip": {
+        "role": "skin",
+        "displayName": "Kawaii Skin Chip",
+        "canonical": "rgb(255, 236, 244)",
+        "source": "skins.KAWAII[\"CHIP\"]",
+        "tonalRamp": [
+          "#12070c",
+          "#2d2026",
+          "#4a3b41",
+          "#68595f",
+          "#89787f",
+          "#aa99a0",
+          "#d1bec6",
+          "#fbe9f1"
+        ]
+      },
+      "kawaii-skin-star-edge": {
+        "role": "skin",
+        "displayName": "Kawaii Skin Star Edge",
+        "canonical": "rgb(186, 160, 255)",
+        "source": "skins.KAWAII[\"STAR_EDGE\"]",
+        "tonalRamp": [
+          "#140036",
+          "#2d045c",
+          "#48297e",
+          "#654aa0",
+          "#856ac4",
+          "#a68ce9",
+          "#cbb1ff",
+          "#f5deff"
+        ]
+      },
+      "kawaii-skin-candy": {
+        "role": "skin",
+        "displayName": "Kawaii Skin Candy",
+        "canonical": "rgb(146, 120, 255)",
+        "source": "skins.KAWAII[\"CANDY\"]",
+        "tonalRamp": [
+          "#100039",
+          "#2d0078",
+          "#44149c",
+          "#603ec0",
+          "#7d61e6",
+          "#9d84ff",
+          "#c2abff",
+          "#ebe2ff"
+        ]
+      },
+      "kawaii-skin-honey": {
+        "role": "verdict",
+        "displayName": "Honey (WARN stamp)",
+        "canonical": "rgb(255, 196, 72)",
+        "source": "skins.KAWAII[\"HONEY\"]",
+        "tonalRamp": [
+          "#210000",
+          "#451100",
+          "#653100",
+          "#865100",
+          "#a97100",
+          "#cc9300",
+          "#f4b93b",
+          "#ffe78d"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "body": {
+        "displayName": "Body",
+        "purpose": "Carlito 22: prose lines, badge descriptions, status names (steps to 18/15)."
+      },
+      "body-small": {
+        "displayName": "Small",
+        "purpose": "Carlito 18: footer hint and YES/NO help line on both skins."
+      },
+      "body-tiny": {
+        "displayName": "Tiny",
+        "purpose": "Carlito 15: machine model / CPU lines in the header."
+      },
+      "number": {
+        "displayName": "Number",
+        "purpose": "DejaVu Sans Mono Bold 17 (mono_m): tabs, badges, readouts, result words."
+      },
+      "number-label": {
+        "displayName": "Number label",
+        "purpose": "DejaVu Sans Mono 13 (mono_s): readout labels REV / DATE / TIME."
+      },
+      "mecha-display": {
+        "displayName": "Mecha display",
+        "purpose": "Bebas Neue Bold 46 caps, 1 px tracking: home, card and animation titles (card title capped at x1.15 text scale)."
+      },
+      "mecha-header": {
+        "displayName": "Mecha header",
+        "purpose": "Bebas Neue Bold 34 caps, 1.5 px tracking: toolkit name in the command bar."
+      },
+      "mecha-plate": {
+        "displayName": "Mecha plate",
+        "purpose": "Bebas Neue Bold 28: verdict plates, YES/NO, SYSTEM STATUS."
+      },
+      "mecha-bay-name": {
+        "displayName": "Mecha bay name",
+        "purpose": "Bebas Neue Bold caps, ladder 28/25/22/19 x ts + 23/21/19/17 x s; largest that fits."
+      },
+      "mecha-tag": {
+        "displayName": "Mecha tag",
+        "purpose": "Bebas Neue Regular 22: LIVE chip."
+      },
+      "kawaii-display": {
+        "displayName": "Kawaii display",
+        "purpose": "Comfortaa Bold 30: band name, home, card and animation titles (card title capped at x1.15)."
+      },
+      "kawaii-stamp": {
+        "displayName": "Kawaii stamp",
+        "purpose": "Comfortaa Bold 24: result stamps, YES/NO, Checklist heading."
+      },
+      "kawaii-sticker-name": {
+        "displayName": "Kawaii sticker name",
+        "purpose": "Comfortaa Bold, ladder 19/17/15/13 x ts + 17/15/13/11 x s."
+      },
+      "kawaii-chip": {
+        "displayName": "Kawaii chip",
+        "purpose": "Comfortaa Bold 15 (steps to 12): stamps on stickers and in the Checklist, LIVE chip."
+      }
+    },
+    "shadows": [
+      {
+        "name": "kawaii-backing-card",
+        "value": "7px 9px 0 #d9ccff",
+        "purpose": "Card backing paper (flat, no blur)."
+      },
+      {
+        "name": "kawaii-backing-sticker",
+        "value": "5px 6px 0 #d9ccff",
+        "purpose": "Sticker backing; 8px 9px when selected."
+      },
+      {
+        "name": "kawaii-backing-status",
+        "value": "6px 7px 0 #d9ccff",
+        "purpose": "Checklist column backing."
+      },
+      {
+        "name": "kawaii-backing-row",
+        "value": "4px 4px 0 #d9ccff",
+        "purpose": "Selected menu row; active YES/NO uses 4px 5px."
+      }
+    ],
+    "motion": [
+      {
+        "name": "redraw-on-change",
+        "value": "whole-frame redraw",
+        "purpose": "No transitions: frames are composed off-screen and blitted only on change."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "min",
+        "value": "1024x768"
+      },
+      {
+        "name": "base",
+        "value": "1280x800 (s = H/800 = 1)"
+      },
+      {
+        "name": "common",
+        "value": "1366x768"
+      },
+      {
+        "name": "large",
+        "value": "1920x1080"
+      }
+    ],
+    "scaling": "All px at scale 1; multiply by s = H/800 and TEXT_SCALE (100-200 % setting, clamped 0.75-2.5). Card titles grow with TEXT_SCALE only to x1.15.",
+    "gridRules": {
+      "statusColumnShare": 0.25,
+      "statusColumnGap": 30,
+      "gridTopUnderHeader": 78,
+      "columnsTried": [
+        2,
+        8
+      ],
+      "heightToWidthMax": 0.9,
+      "aspectCap": 1.5,
+      "gutters": [
+        22,
+        14
+      ],
+      "ICON_TOP": {
+        "mecha": 30,
+        "kawaii": 44
+      },
+      "BOTTOM_PAD": 10,
+      "ICON_MIN": 28,
+      "NAME_INSET": 12,
+      "iconShare": 0.3,
+      "iconSize": "max(12, min(0.86 x room, 0.36 x w, 0.36 x h))",
+      "statusRowMax": 36
+    },
+    "shapes": {
+      "mechaChamfer": {
+        "corners": "tl br",
+        "card": 26,
+        "bay": "13% of short side",
+        "statusColumn": 18,
+        "choice": 12,
+        "plateAndRow": 10,
+        "liveChip": 7
+      },
+      "kawaiiRadius": {
+        "card": 26,
+        "statusColumn": 22,
+        "sticker": "16% of short side",
+        "rowsStampsChipsBars": "pill"
+      },
+      "kawaiiScallopRadius": 10
+    }
+  },
+  "components": [
+    {
+      "name": "Mecha bay",
+      "kind": "card",
+      "refersTo": "mecha-bay",
+      "description": "Home tile on the deck: chamfered plate, mono tab, status lamp, icon, caps name. Selected = orange outline, tab and name, hazard strip.",
+      "html": "<div class=\"ds-mbay\" tabindex=\"0\"><span class=\"ds-mbay-tab\">01</span><span class=\"ds-mbay-lamp\"></span><span class=\"ds-mbay-name\">HDD / SSD</span></div>",
+      "css": ".ds-mbay{position:relative;width:148px;height:132px;background:#3e3e48;clip-path: polygon(19px 0, 100% 0, 100% calc(100% - 19px), calc(100% - 19px) 100%, 0 100%, 0 19px);font-family:'Bebas Neue',Carlito,sans-serif;color:#ecece8;cursor:pointer}.ds-mbay::before{content:'';position:absolute;inset:2px;background:#16161a;clip-path: polygon(18px 0, 100% 0, 100% calc(100% - 18px), calc(100% - 18px) 100%, 0 100%, 0 18px);}.ds-mbay-tab{position:absolute;top:8px;left:23px;background:#28282f;color:#9696a0;font:700 17px 'DejaVu Sans Mono',monospace;padding:2px 7px}.ds-mbay-lamp{position:absolute;top:10px;right:10px;width:14px;height:14px;border-radius:50%;background:#39d98a;box-shadow:0 0 0 3px #121216,0 0 0 5px #3e3e48}.ds-mbay-name{position:absolute;bottom:10px;left:0;right:0;text-align:center;font-size:22px}.ds-mbay:hover,.ds-mbay:focus-visible{background:#ff6a00;outline:none}.ds-mbay:hover .ds-mbay-tab,.ds-mbay:focus-visible .ds-mbay-tab{background:#ff6a00;color:#0b0b0d}.ds-mbay:hover .ds-mbay-name,.ds-mbay:focus-visible .ds-mbay-name{color:#ff6a00}"
+    },
+    {
+      "name": "Mecha alert plate (FAIL)",
+      "kind": "chip",
+      "refersTo": "mecha-plate-fail",
+      "description": "Verdict plate: chamfered fill in the verdict colour, TEXT_ON letters; FAIL gets hazard flanks.",
+      "html": "<div class=\"ds-mplate\"><i class=\"ds-mhaz\"></i><b>FAIL</b><i class=\"ds-mhaz\"></i></div>",
+      "css": ".ds-mplate{display:inline-flex;gap:4px;align-items:center;background:#16161a;padding:8px}.ds-mplate b{display:inline-block;height:40px;line-height:42px;padding:0 18px;background:#ff5c50;color:#0b0b0d;font:700 28px 'Bebas Neue',Carlito,sans-serif;clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);}.ds-mhaz{display:inline-block;width:22px;height:40px;background:repeating-linear-gradient(135deg,#ffc400 0 7px,#111113 7px 14px)}"
+    },
+    {
+      "name": "Mecha menu row",
+      "kind": "nav",
+      "refersTo": "mecha-menu-row-selected",
+      "description": "Menu row: steel two-digit number, bone name; selected row is a chamfered orange fill with TEXT_ON text.",
+      "html": "<div class=\"ds-mmenu\"><button class=\"ds-mrow\"><span>01</span><b>1 minute</b><em>quick sanity check</em></button><button class=\"ds-mrow ds-on\"><span>02</span><b>5 minutes</b><em>normal check</em></button></div>",
+      "css": ".ds-mmenu{background:#16161a;padding:12px;width:520px}.ds-mrow{display:flex;gap:18px;width:100%;border:0;background:none;padding:8px 14px;font:22px Carlito,sans-serif;color:#ecece8;text-align:left;cursor:pointer}.ds-mrow span{font:20px 'DejaVu Sans Mono',monospace;color:#9696a0}.ds-mrow em{font-style:normal;color:#9696a0}.ds-mrow.ds-on,.ds-mrow:hover,.ds-mrow:focus-visible{background:#ff6a00;color:#0b0b0d;outline:none;clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);}.ds-mrow.ds-on span,.ds-mrow:hover span,.ds-mrow:focus-visible span{color:#0b0b0d;font-weight:700}.ds-mrow.ds-on em,.ds-mrow:hover em,.ds-mrow:focus-visible em{color:#482209}"
+    },
+    {
+      "name": "Mecha segmented gauge",
+      "kind": "custom",
+      "refersTo": "mecha-bay",
+      "description": "Progress as block segments (~14 px pitch, 3 px gap, 16 tall); lit in ACCENT, unlit in TAB, percentage in mono muted.",
+      "html": "<div class=\"ds-mgauge\"><div class=\"ds-mgauge-track\"></div><span>62%</span></div>",
+      "css": ".ds-mgauge{display:flex;align-items:center;gap:16px;background:#16161a;padding:12px;width:520px}.ds-mgauge-track{flex:1;height:16px;background:repeating-linear-gradient(90deg,transparent 0 11px,#16161a 11px 14px),linear-gradient(90deg,#ff6a00 62%,#28282f 62%)}.ds-mgauge span{font:20px 'DejaVu Sans Mono',monospace;color:#9696a0}"
+    },
+    {
+      "name": "Kawaii sticker",
+      "kind": "card",
+      "refersTo": "kawaii-sticker",
+      "description": "Home tile on the sheet: white rounded sticker on lavender backing, round number badge, result stamp, violet icon, plum name. Selected = violet fill, white text, deeper backing.",
+      "html": "<div class=\"ds-ksticker\" tabindex=\"0\"><span class=\"ds-kbadge\">2</span><span class=\"ds-kstamp\">PASS</span><span class=\"ds-kname\">HDD / SSD</span></div>",
+      "css": ".ds-ksticker{position:relative;width:146px;height:130px;background:#fff;border:2px solid #f6bad2;border-radius:21px;box-shadow:5px 6px 0 #d9ccff;font-family:Comfortaa,Carlito,sans-serif;color:#3b2142;cursor:pointer}.ds-kbadge{position:absolute;top:10px;left:10px;min-width:28px;height:28px;border-radius:14px;background:#ffc7de;color:#3b2142;font:700 17px 'DejaVu Sans Mono',monospace;display:flex;align-items:center;justify-content:center}.ds-kstamp{position:absolute;top:13px;right:10px;padding:2px 8px;border-radius:11px;background:#107c58;color:#fff;font-weight:700;font-size:15px}.ds-kname{position:absolute;bottom:12px;left:0;right:0;text-align:center;font-weight:700;font-size:17px}.ds-ksticker:hover,.ds-ksticker:focus-visible{background:#6c4af0;border-color:#5030d6;color:#fff;box-shadow:8px 9px 0 #d9ccff;outline:none}.ds-ksticker:hover .ds-kbadge,.ds-ksticker:focus-visible .ds-kbadge{background:#fff;color:#6c4af0}.ds-ksticker:hover .ds-kstamp,.ds-ksticker:focus-visible .ds-kstamp{background:#fff;color:#107c58}"
+    },
+    {
+      "name": "Kawaii result stamps",
+      "kind": "chip",
+      "refersTo": "kawaii-stamp-pass",
+      "description": "Pill stamps: mint and cherry with white text and a check / cross mark, WARN honey with plum text, unknown in CHIP.",
+      "html": "<div class=\"ds-kstamps\"><span class=\"ds-ks ds-pass\">&#10003; PASS</span><span class=\"ds-ks ds-warn\">WARN</span><span class=\"ds-ks ds-fail\">&#10005; FAIL</span><span class=\"ds-ks ds-unk\">UNKNOWN</span></div>",
+      "css": ".ds-kstamps{display:flex;gap:12px;background:#fff;padding:12px}.ds-ks{height:40px;line-height:40px;padding:0 18px;border-radius:20px;font:700 24px Comfortaa,Carlito,sans-serif}.ds-pass{background:#107c58;color:#fff}.ds-warn{background:#ffc448;color:#3b2142}.ds-fail{background:#c8203c;color:#fff}.ds-unk{background:#ffecf4;color:#3b2142}"
+    },
+    {
+      "name": "Kawaii menu row",
+      "kind": "nav",
+      "refersTo": "kawaii-menu-row-selected",
+      "description": "Menu row: round BAND number badge, plum bold name, mauve description; selected = violet pill on backing paper, white badge with violet digit.",
+      "html": "<div class=\"ds-kmenu\"><button class=\"ds-krow\"><span>1</span><b>1 minute</b><em>quick sanity check</em></button><button class=\"ds-krow ds-on\"><span>2</span><b>5 minutes</b><em>normal check</em></button></div>",
+      "css": ".ds-kmenu{background:#fff;padding:12px;width:520px}.ds-krow{display:flex;align-items:center;gap:14px;width:100%;border:0;background:none;padding:6px 12px;border-radius:22px;font:22px Carlito,sans-serif;color:#3b2142;text-align:left;cursor:pointer}.ds-krow span{width:26px;height:26px;border-radius:13px;background:#ffc7de;font:700 17px 'DejaVu Sans Mono',monospace;display:flex;align-items:center;justify-content:center}.ds-krow em{font-style:normal;color:#76567e}.ds-krow.ds-on,.ds-krow:hover,.ds-krow:focus-visible{background:#6c4af0;color:#fff;box-shadow:4px 4px 0 #d9ccff;outline:none}.ds-krow.ds-on span,.ds-krow:hover span,.ds-krow:focus-visible span{background:#fff;color:#6c4af0}.ds-krow.ds-on em,.ds-krow:hover em,.ds-krow:focus-visible em{color:#fff}"
+    },
+    {
+      "name": "YES / NO choice",
+      "kind": "button",
+      "refersTo": "kawaii-choice-unlit",
+      "description": "150 x 46 pair; active = PASS_ / FAIL_ fill (Mecha chamfer with TEXT_ON, Kawaii pill with white + backing), inactive = outline and muted letters. Shown in Kawaii.",
+      "html": "<div class=\"ds-yn\"><button class=\"ds-yn-b ds-yes ds-on\">YES</button><button class=\"ds-yn-b ds-no\">NO</button></div>",
+      "css": ".ds-yn{display:flex;gap:20px;background:#fff;padding:12px}.ds-yn-b{width:150px;height:46px;border-radius:23px;border:2px solid #f6bad2;background:#fff;color:#76567e;font:700 24px Comfortaa,Carlito,sans-serif;cursor:pointer}.ds-yes.ds-on,.ds-yes:hover,.ds-yes:focus-visible{background:#107c58;border-color:#107c58;color:#fff;box-shadow:4px 5px 0 #d9ccff;outline:none}.ds-no:hover,.ds-no:focus-visible{background:#c8203c;border-color:#c8203c;color:#fff;box-shadow:4px 5px 0 #d9ccff;outline:none}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Service-manual sheet (manual look); \"The Launch Deck\" (Mecha); \"The Sticker Sheet\" (Kawaii)",
+    "overview": "**Creative North Star (Mecha): \"The Launch Deck.\"** The bench is a launch deck. Every test is a system bay with its own status lamp, and a fault is an alert plate rather than a sentence. The look is a matte console-black ground, near-black chamfered plates, tracked Bebas capitals, mono readouts and segmented gauges. The deck has no floating white cards and no rounded tiles. **Creative North Star (Kawaii): \"The Sticker Sheet.\"** The toolkit is a sticker sheet. Every test is a white sticker on its lavender backing paper, and every result is a reward stamp. The look is a blush-pink ground, a scalloped header band, plum ink, Comfortaa for names and stamps, round number badges and four-point sparkles in the margins. The category standard is played straight, and every verdict must still read from arm's length. Both themes were picked by Ash for the bench team's enjoyment. They may be loud, but a verdict must never be ambiguous.",
+    "keyCharacteristics": [
+      "Each theme owns every screen while it is on, but it changes only what is around and under the words. Positions and rows stay where they are.",
+      "There is no glow, blur or gradient. Depth comes from flat plates (Mecha) or flat offset backing paper (Kawaii).",
+      "Display face for titles, names and verdicts; Carlito for anything read as prose; DejaVu Sans Mono for every number.",
+      "Decoration (hazard stripes, scallops, sparkles, candy stripes) goes only where no word is drawn."
+    ],
+    "rules": [
+      {
+        "name": "The Signal Orange Rule",
+        "body": "Orange means selected. Corner brackets, plate outlines and the title rule are grey, never orange. The build has two known exceptions that are not precedent: the lit segments of the progress gauge and the brand mark (`_draw_brand`) are also drawn in `ACCENT`.",
+        "section": "colors"
+      },
+      {
+        "name": "The Red Bay Rule",
+        "body": "A failed bay gets a 3 px red outline, so a FAIL can be found from across the bench without reading lamps. Selection orange still wins over it.",
+        "section": "colors"
+      },
+      {
+        "name": "The Honey Stamp Rule",
+        "body": "WARN is honey with plum text (8.93:1). White on amber was the weakest pair on the sheet. On a selected violet row or sticker, every stamp turns white and carries its verdict colour as text.",
+        "section": "colors"
+      },
+      {
+        "name": "The 4.5:1 Rule",
+        "body": "Every word must hold 4.5:1 or better against what it sits on. These pairs were measured in the shipped build. Kawaii: white on `PASS_` 5.19, white on `ACCENT` 5.42, white on `FAIL_` 5.63, plum on honey 8.93, mauve on blush 5.17. Mecha: `FAIL_` on the selected status row 4.80, `TEXT_ON` on orange 6.85, steel on plate 6.16, steel on tab 5.00. The first violet and green were 4.3:1 and were darkened to pass.",
+        "section": "colors"
+      },
+      {
+        "name": "The Word Wins Rule",
+        "body": "A PASS/WARN/FAIL colour always comes with its word. Lamps and outlines repeat a verdict that is written elsewhere.",
+        "section": "colors"
+      },
+      {
+        "name": "The Read-Not-Glanced Rule",
+        "body": "The footer hint and the YES/NO help line are Carlito 18 in sentence case, in muted colour, on both themes. 13 px mono capitals were the hardest words on the deck to make out.",
+        "section": "typography"
+      },
+      {
+        "name": "The Name First Rule",
+        "body": "In the status column the test name has the first claim on its row. A long result steps down a size first, then to its short form (NOT TESTED -> N/T, MARGINAL -> MARG, PARTIAL -> PART, STOPPED -> STOP), and only after that is the name clipped.",
+        "section": "typography"
+      },
+      {
+        "name": "The Fixed Rows Rule",
+        "body": "A skin never moves anything. Every test script places its lines by row number, and the skins draw the same rows, card box (`_card_box`), header height (`hdr` 74), footer (`ftr` 56) and card padding (`pad` 34). Only what is around and under the words changes, so no script needs to know which skin is on.",
+        "section": "layout"
+      }
+    ],
+    "dos": [
+      "Do keep every row, the card box and the header height identical to the palette themes. A skin changes only what is around and under the words.",
+      "Do put decoration only where no word is drawn. That means hazard stripes on the bar, bay top bands and plate flanks; scallops and sparkles in the band and margins; and candy stripes inside bar fills.",
+      "Do keep every word at 4.5:1 or better on what it sits on. Measure derived mixes too, not just the base roles.",
+      "Do reserve signal orange for the selection on Mecha.",
+      "Do keep a fallback for every display face to Carlito Bold, and keep the install and assertion in `finalize_chroot.sh` in step with `skins.py`.",
+      "Do run `python3 toolkit/skins.py --check` (the build runs it). It renders home, menu, card and confirm for both skins at 1280x800, 1366x768 (x1 and x1.5), 1920x1080 and 1024x768."
+    ],
+    "donts": [
+      "Don't add a mascot character, busy art behind text (speed lines, halftone, patterns), or Japanese lettering. Ash ruled all three out.",
+      "Don't round anything on Mecha, and don't add glow, blur or gradients to either skin.",
+      "Don't give the Kawaii backing paper a grey or black colour or a blur. It is lavender sticker paper.",
+      "Don't put white text on amber or honey. A WARN stamp is plum on honey.",
+      "Don't let a status-column result push the test name out. Step the result down first."
+    ]
+  }
+}

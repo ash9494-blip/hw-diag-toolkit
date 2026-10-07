@@ -5,6 +5,13 @@
 #   test/boot-vm.sh usb        # ISO as a USB stick on xHCI (boot-drive tests)
 #   test/boot-vm.sh touch      # CD + virtio multitouch screen
 #   test/boot-vm.sh sound      # CD + Intel HDA sound card (Driver check, sound test)
+#   test/boot-vm.sh sd         # CD + an SD card reader with its slot empty
+#   test/boot-vm.sh full       # CD + sound + SD reader
+#
+# SD card:  python3 test/mc.py "change sdc /tmp/diagvm/sd.img raw"   (insert)
+#           python3 test/mc.py "eject -f sdc"                         (take out)
+# Switches (lid, tablet mode, headphone jack): QEMU has none - a uinput
+#           daemon in the guest fakes them (see the 1.20 VM scripts).
 #
 # Screen: VNC on :9 (port 5909), or test/shot.sh NAME -> /tmp/diagvm/NAME.png
 # Keys:   test/k.sh right ret q ...       (0.7 s apart, via the HMP monitor)
@@ -32,9 +39,13 @@ case "${1:-cd}" in
   *)     BOOT="-cdrom $ISO -boot d" ;;
 esac
 EXTRA=""
+SOUND="-audiodev none,id=snd0 -device intel-hda,id=hda -device hda-duplex,audiodev=snd0"
+SD="-device sdhci-pci -drive if=none,id=sdc -device sd-card,drive=sdc"
 case "${1:-}" in
   touch) EXTRA="-device virtio-multitouch-pci,id=ts" ;;
-  sound) EXTRA="-audiodev none,id=snd0 -device intel-hda,id=hda -device hda-duplex,audiodev=snd0" ;;
+  sound) EXTRA=$SOUND ;;
+  sd)    EXTRA=$SD ;;
+  full)  EXTRA="$SOUND $SD" ;;
 esac
 # setsid: survives the calling shell timing out; nohup alone does not
 setsid --fork qemu-system-x86_64 $KVM -m 3072 -smp 2 -vga std -display none -vnc :9 \

@@ -3,6 +3,92 @@
 Newest first. Each entry says what changed and why; the "why" is usually a
 real machine on Ash's bench.
 
+## 1.20.0 — 2026-10-07
+New tests from the 1.19 review (Ash: "go ahead"), and network checks taken
+from the netprobe agent where they apply to a laptop on the bench.
+- **Hardware error log** (`errlog.sh`, tile 17 on the home grid, last step of
+  Full run): reads the kernel log since boot - and the boot copy menu.sh
+  keeps - for faults no test watches. It looks for:
+  - USB over-current and devices that will not start
+  - SATA link errors and NVMe resets
+  - drive I/O errors
+  - processor machine checks and memory (EDAC) errors
+  - PCIe errors, from the log and the AER counters
+  - overheating
+  - Wi-Fi and Bluetooth firmware failures
+  - touchpad bus and SD reader errors
+
+  Each finding says what to do. Matches nothing a healthy boot logs (checked
+  against a synthetic log and WSL's real one).
+- **CPU test: held back while cool** - a processor pinned at 400-800 MHz by
+  the board (BD PROCHOT: a charger it does not accept, a failing battery, a
+  sensor) stayed cool and PASSED. The clock under load (samples below 85 C)
+  is now compared with the base clock; on Intel the PROCHOT status bit (MSR
+  0x19c bit 2, read only) is shown as evidence.
+- **SD card reader** (`sdtest.sh`, Peripherals tile 12):
+  - The slot counts only when a card goes in during the test.
+  - The bus mode is read from the kernel (SDR104, High Speed...).
+  - The card is read briefly; nothing is written to it.
+  - The card going out must be noticed too (a stuck card-detect switch).
+- **Lid sensor** (`lidtest.sh`, Peripherals tile 13): close and open, read
+  from the kernel's switch (`swstate.py`, EVIOCGSW - numbers from a C probe).
+  2-in-1s also fold into tablet mode and back. A sensor reading "closed"
+  while the screen is in use is a FAIL on the spot.
+- **Headphone jack** in the Sound test: plug-in and removal through the
+  jack's switch, a tone per ear, and the answer "it came from the speakers"
+  - the jack's plug-detect switch.
+- **Ethernet and Wi-Fi checks go out of the adapter under test** (`netcheck.sh`).
+  Before, with Wi-Fi joined from the home screen, the Ethernet test's internet
+  and DNS checks went out over Wi-Fi, and a dead port could pass. dhclient
+  gave the second link no default route at all ("File exists"); one is added
+  at a high metric. New checks, shared by both tests:
+  - router quality from 20 pings
+  - internet by ping *and* by web (ping blocked is not a fault)
+  - DNS asked of the network's server and of 1.1.1.1 directly
+  - a login page (captive portal) in the way
+  - a secure connection
+  - **the hardware clock against the internet's**: a flat CMOS battery, with
+    Windows' local-time offset and ordinary drift allowed for
+
+  A "likely cause" names the first layer that fails, and says when it is
+  the network's fault and not the laptop's. Network-side faults no longer
+  fail the laptop's port.
+- **Ethernet**:
+  - the wire's error counters are read before and after a 50 MB download
+    (CRC and frame errors point at the cable, the socket or the chip)
+  - 100 Mbit/s on a gigabit port, when the switch also offers 1000, is
+    called a broken pair
+  - DHCP failure says why (no answer, or offered but not confirmed)
+  - the result screen fits 1366x768
+- **Wi-Fi**:
+  - the signal on each antenna from `iw station dump`: 20 dB apart = a lead
+    off or broken (FAIL), 12 = WARN; the overall figure hid this
+  - the share of retried frames
+  - the link kind: Wi-Fi 4/5/6/7, channel width, streams
+  - the gateway is this link's own (the old fallback took the cable's)
+- **Build**: every script is syntax-checked and every .py compiled before the
+  ISO is made; `/opt/diag/build-epoch` records the build date.
+- **Two anime themes** (Settings -> Colour theme; Ash: "i want mecha common
+  deck and kawaii paster both"). Each is a whole skin (`skins.py`): the
+  header, home grid, menus, cards, badges, bars, YES/NO and the How-it-works
+  title and LIVE chip. Row positions are unchanged, so no test script knows
+  which skin is on.
+  - **Mecha command deck**: a black launch deck; every test is a chamfered
+    bay with a status lamp, and a failed bay is outlined red. Orange marks
+    only the selection. Hazard stripes appear only on the deck's furniture.
+    Display face: Bebas Neue.
+  - **Kawaii pastel**: a pink sticker sheet; results are reward stamps
+    (WARN in honey). Sparkles appear only in the margins, candy stripes only
+    inside bar fills. Display face: Comfortaa.
+
+  Ash ruled out a mascot, busy art behind text and Japanese lettering. Every
+  word keeps 4.5:1 or better. The themes work from 1024x768 and at 150 %
+  text. The fonts come from Ubuntu's fonts-bebas-neue / fonts-comfortaa
+  (OFL); the build asserts them and runs `skins.py --check`. Light stays the
+  default. Fixed on the way: the dark and high-contrast themes drew PASS/FAIL
+  badges in the light theme's colours (the badge table was built once at
+  start-up).
+
 ## 1.19.0 — 2026-10-07
 Released as 1.19.0 at Ash's request ("deploy v1.19 with all the fixes");
 the charging fixes below were built and VM-tested as 1.18.1 first.

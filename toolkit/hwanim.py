@@ -134,16 +134,17 @@ SCENES = [
         (8, "Scan: the radio listens on every channel and lists each access point it hears, "
             "with its signal in dBm. No password is needed - hearing them at all proves the card "
             "and its antennas are alive."),
-        (8, "Signal: -55 dBm or better is excellent, below -80 nothing works reliably. An "
-            "antenna lead left off after a screen or hinge repair reads -85 or worse even right "
-            "next to the access point."),
+        (8, "Signal: -55 dBm or better is excellent, below -80 nothing works. The card also "
+            "reads each antenna on its own: two healthy leads sit a few dB apart - 20 dB apart "
+            "is a lead off or broken, even when the overall signal looks fine."),
         (8, "Stability: on the network joined from the Wi-Fi page, every 2 s the toolkit reads "
             "the signal, the link rate and which access point it is on - and pings the gateway."),
         (7, "A link that drops while the machine sits still is a fault in the card or its "
             "antennas, not coverage: FAIL. Lost pings are counted, and roaming to another access "
             "point is noted."),
-        (7, "Last, the internet: three name lookups, three HTTPS sites, and one 20 MB download "
-            "for an indicative speed."),
+        (7, "Last, the internet - through this card only: out by ping and by web, DNS asked "
+            "two ways, a secure site, a 20 MB download. A fault past the router is named as "
+            "the network's, not the card's."),
     ]),
     ("ether", "Ethernet test", "", [
         (8, "Link: with a live cable in, the network chip and the switch at the other end "
@@ -154,9 +155,9 @@ SCENES = [
         (8, "Address: DHCP. The laptop asks for one (Discover), the router offers one (Offer), "
             "the laptop takes it (Request) and the router confirms (Ack). Link up but no "
             "address = FAIL."),
-        (8, "Traffic: two pings to the gateway, four to 1.1.1.1 on the internet - any loss "
-            "shows - and one name lookup. All working = PASS; an address but no internet, or no "
-            "DNS = MARGINAL."),
+        (8, "Traffic, through this port only: 20 pings to the router, the internet by ping and "
+            "by web, DNS two ways, a download - the wire's error counters read before and after. "
+            "Errors = cable, socket or chip."),
     ]),
 ]
 NAMES = [s[0] for s in SCENES]
@@ -2174,8 +2175,8 @@ class Live(sa.Live):
         if not say_:
             return sa.Live._title(self, d, title)
         d.rectangle([st.ix0, st.title_y - int(8 * s), st.ix1, st.main_top - int(6 * s)], fill=P.PAPER)
-        st.text(d, (st.ix0, st.title_y), title, st.scr.f_h, P.INK)
-        st.tag(d, (st.ix1 - int(30 * s), st.title_y + int(16 * s)), "LIVE", bg=P.ACCENT)
+        st.title_text(d, (st.ix0, st.title_y), title, right=st.ix1 - int(80 * s))
+        st.live_tag(d, (st.ix1 - int(30 * s), st.title_y + int(16 * s)))
         cy = st.tabs_y + int(14 * s)
         h = int(14 * s)
         d.polygon([(st.ix0, cy - h // 2), (st.ix0 + int(h * 0.85), cy), (st.ix0, cy + h // 2)], fill=P.ACCENT)
@@ -2313,7 +2314,7 @@ def main(argv):
         return 0
     if "--check" in argv:
         # what the build runs: a broken animation stops the build, not a test
-        n = check(themes=("light", "dark", "contrast"))
+        n = check(themes=("light", "dark", "contrast", "mecha", "kawaii"))
         n += check(sizes=((1024, 768), (1366, 768), (1920, 1080)), themes=("light",))
         print("hwanim: %d frames rendered OK" % n)
         return 0

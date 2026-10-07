@@ -20,6 +20,7 @@
 #   4. Internet  - DNS, HTTPS latency to several endpoints, and throughput.
 . /opt/diag/lib.sh
 . /opt/diag/tui.sh
+. /opt/diag/netcheck.sh
 
 WPA_CONF=$RUN_DIR/wpa.conf
 WPA_LOG=$RUN_DIR/wpa.log
@@ -74,6 +75,52 @@ link_rate() { iw dev "$1" link 2>/dev/null | awk '/tx bitrate:/{print $3; exit}'
 link_bssid() { iw dev "$1" link 2>/dev/null | awk '/^Connected to/{print $3; exit}'; }
 link_ssid() { iw dev "$1" link 2>/dev/null | awk '/SSID:/{$1="";sub(/^ /,"");print;exit}'; }
 link_freq() { iw dev "$1" link 2>/dev/null | awk '/freq:/{print $2; exit}'; }
+
+# What the card says about the link, per antenna. "signal: -45 [-47, -49] dBm"
+# is the overall level and then each receive chain - each antenna lead. A
+# lead left off after a screen or hinge job reads 20-30 dB below its twin
+# while the overall figure still looks fine, which is how the old test
+# passed machines with one dead antenna. Sets ST_SIG ST_CHAINS ST_TXPKTS
+# ST_RETRIES ST_FAILED ST_BITRATE (empty where the driver does not say).
+station() {   # iface
+  local out
+  out=$(iw dev "$1" station dump 2>/dev/null)
+  # "\ttx packets:\t1234": the line starts with a tab, so the value is field 3
+  # (and iw pads some names: "signal:  \t")
+  st() { printf '%s\n' "$out" | awk -F'\t' -v k="$1" '{n = $2; sub(/ +$/, "", n)} n == k {print $3; exit}'; }
+  ST_SIG=$(st "signal:" | awk '{print $1}')
+  ST_CHAINS=$(st "signal:" | sed -n 's/.*\[\(.*\)\].*/\1/p' | tr -d ' ' | tr ',' ' ')
+  ST_TXPKTS=$(st "tx packets:"); ST_RETRIES=$(st "tx retries:"); ST_FAILED=$(st "tx failed:")
+  ST_BITRATE=$(st "tx bitrate:")
+  case "$ST_TXPKTS" in *[!0-9]*) ST_TXPKTS="" ;; esac
+  case "$ST_RETRIES" in *[!0-9]*) ST_RETRIES="" ;; esac
+  case "$ST_FAILED" in *[!0-9]*) ST_FAILED="" ;; esac
+  return 0
+}
+
+# "866.7 MBit/s VHT-MCS 9 80MHz short GI VHT-NSS 2" -> "Wi-Fi 5, 80 MHz, 2 streams"
+link_kind() {   # tx bitrate text
+  printf '%s\n' "$1" | awk '{
+    gen = "Wi-Fi 1-3 (a/b/g)"
+    if ($0 ~ /EHT-/) gen = "Wi-Fi 7"; else if ($0 ~ /HE-/) gen = "Wi-Fi 6"
+    else if ($0 ~ /VHT-/) gen = "Wi-Fi 5"; else if ($0 ~ / MCS /) gen = "Wi-Fi 4"
+    w = 20; if (match($0, /[0-9]+MHz/)) w = substr($0, RSTART, RLENGTH - 3)
+    n = ""
+    if (match($0, /NSS [0-9]+/)) n = substr($0, RSTART + 4, RLENGTH - 4)
+    else if (match($0, / MCS [0-9]+/)) n = int(substr($0, RSTART + 5, RLENGTH - 5) / 8) + 1
+    printf "%s, %s MHz", gen, w
+    if (n != "") printf ", %s stream%s", n, (n == 1 ? "" : "s")
+  }'
+}
+
+card_chains() {   # iface -> how many receive antennas the card has (0 = not said)
+  local phy; phy=$(iw dev "$1" info 2>/dev/null | awk '/wiphy/{print $2; exit}')
+  iw phy "phy$phy" info 2>/dev/null | awk '/Available Antennas/{
+    v = $NF; sub(/^0x/, "", v); n = 0
+    for (i = 1; i <= length(v); i++) { d = index("0123456789abcdef", tolower(substr(v, i, 1))) - 1
+      while (d > 0) { n += d % 2; d = int(d / 2) } }
+    print n; exit }'
+}
 
 freq_band() {    # 2412 -> "2.4 GHz ch 1"
   local f=$1 ch=""
@@ -172,8 +219,12 @@ require_link() {   # -> 0 when there is a live wireless link to watch
     IFACE=$i
     SSID=$(wifi_ssid_show "$(link_ssid "$i")")
     IPADDR=$(ip -4 addr show "$i" 2>/dev/null | awk '/inet /{print $2; exit}')
-    GATEWAY=$(ip route 2>/dev/null | awk -v d="$i" '$1=="default" && $0 ~ d {print $3; exit}')
-    [ -z "$GATEWAY" ] && GATEWAY=$(ip route 2>/dev/null | awk '$1=="default"{print $3; exit}')
+    # This link's own router only. The old fallback took any default route,
+    # and with a cable plugged in that was the wired router - pinged over
+    # the cable while the Wi-Fi was being judged.
+    GATEWAY=$(ip route show default dev "$i" 2>/dev/null | awk '{print $3; exit}')
+    [ -z "$GATEWAY" ] && GATEWAY=$(nc_lease "/var/lib/dhcp/dhclient.$i.leases" routers)
+    nc_route "$i" "$GATEWAY"
     return 0
   done
   return 1
@@ -236,6 +287,34 @@ human_duration() {
 DROPS=0; ROAMS=0; PING_SENT=0; PING_LOST=0
 RSSI_MIN=999; RSSI_MAX=-999; RSSI_SUM=0; RSSI_N=0
 LAT_SUM=0; LAT_N=0; LAT_MAX=0; FIRST_BSSID=""
+CH_N=0; CH_A=0; CH_B=0; CH_COUNT=0            # per-antenna signal, summed per sample
+TX0=""; RT0=""; FL0=""; TX1=""; RT1=""; FL1=""; LINK_KIND=""
+
+sample_station() {   # iface: the antennas, the retry counters, the kind of link
+  local a b _
+  station "$1"
+  if [ -n "$ST_CHAINS" ]; then
+    read -r a b _ <<< "$ST_CHAINS"
+    CH_COUNT=$(printf '%s\n' "$ST_CHAINS" | wc -w)
+    if [ -n "$b" ]; then CH_N=$((CH_N+1)); CH_A=$((CH_A + a)); CH_B=$((CH_B + b)); fi
+  fi
+  if [ -n "$ST_TXPKTS" ]; then
+    [ -z "$TX0" ] && { TX0=$ST_TXPKTS; RT0=${ST_RETRIES:-}; FL0=${ST_FAILED:-}; }
+    TX1=$ST_TXPKTS; RT1=${ST_RETRIES:-}; FL1=${ST_FAILED:-}
+  fi
+  [ -n "$ST_BITRATE" ] && LINK_KIND=$(link_kind "$ST_BITRATE")
+  return 0
+}
+
+chain_avg() { [ "$CH_N" -gt 0 ] && printf '%d / %d dBm' $((CH_A / CH_N)) $((CH_B / CH_N)); }
+chain_gap() { [ "$CH_N" -gt 0 ] && { local g=$(( (CH_A - CH_B) / CH_N )); printf '%d' "${g#-}"; }; }
+
+retry_pct() {   # share of transmitted frames that needed a retry, or empty
+  [ -n "$RT0" ] && [ -n "$RT1" ] && [ -n "$TX0" ] || return 1
+  local tx=$((TX1 - TX0)) rt=$((RT1 - RT0))
+  [ "$tx" -ge 50 ] || return 1          # too few frames to say anything
+  printf '%d' $(( rt * 100 / tx ))
+}
 
 stability_run() {   # iface seconds
   local i=$1 secs=$2 t=0 rssi rate freq bssid p
@@ -273,11 +352,13 @@ stability_run() {   # iface seconds
       [ "$rssi" -lt "$RSSI_MIN" ] && RSSI_MIN=$rssi
       [ "$rssi" -gt "$RSSI_MAX" ] && RSSI_MAX=$rssi
     fi
+    sample_station "$i"
 
     p=""
     if [ -n "$GATEWAY" ]; then
       PING_SENT=$((PING_SENT+1))
-      p=$(ping -n -c1 -W2 "$GATEWAY" 2>/dev/null | awk -F'time=' '/time=/{print int($2); exit}')
+      # -I: through this card. Unbound, a plugged-in cable could answer for it.
+      p=$(ping -I "$i" -n -c1 -W2 "$GATEWAY" 2>/dev/null | awk -F'time=' '/time=/{print int($2); exit}')
       if [ -z "$p" ]; then
         PING_LOST=$((PING_LOST+1))
         ev WARN "no ping reply from the gateway"
@@ -287,7 +368,8 @@ stability_run() {   # iface seconds
       fi
     fi
 
-    printf '%d\t%s\t%s\t%s\t%s\t%s\n' "$t" "${rssi:-}" "${rate:-}" "${freq:-}" "${bssid:-}" "${p:-}" >> "$SAMPLES"
+    printf '%d\t%s\t%s\t%s\t%s\t%s\t%s\n' "$t" "${rssi:-}" "${rate:-}" "${freq:-}" "${bssid:-}" "${p:-}" \
+      "$(printf '%s' "$ST_CHAINS" | tr ' ' '/')" >> "$SAMPLES"
     draw_stability "$i" "$t" "$secs" "$rssi" "$rate" "$p"
     sleep "$SAMPLE_EVERY"; t=$(( t + SAMPLE_EVERY ))
     tui_wait_abort 0 && { ev INFO "stopped by the operator"; ABORTED=1; break; }
@@ -306,8 +388,14 @@ draw_stability() {
   else
     tui_kv 10 "Signal now" "link is down" err
   fi
-  tui_kv 11 "Link rate"  "${rate:-—} Mbit/s"
+  tui_kv 11 "Link rate"  "${rate:-—} Mbit/s${LINK_KIND:+  ($LINK_KIND)}"
   [ "$RSSI_N" -gt 0 ] && tui_kv 12 "Signal range" "$RSSI_MAX to $RSSI_MIN dBm"
+  if [ "$CH_N" -gt 0 ]; then
+    local gap; gap=$(chain_gap)
+    tui_kv 17 "Each antenna" "$(chain_avg)$( [ "$gap" -ge 12 ] && echo "  - $gap dB apart" )" \
+      "$( [ "$gap" -ge 20 ] && echo err || { [ "$gap" -ge 12 ] && echo warn || echo ok; } )"
+  fi
+  local rp; rp=$(retry_pct) && tui_kv 18 "Retries" "$rp % of frames" "$( [ "$rp" -gt 30 ] && echo warn || echo ok )"
   if [ -n "$GATEWAY" ]; then
     tui_kv 13 "Gateway ping" "${p:-lost}  (avg $( [ "$LAT_N" -gt 0 ] && echo $((LAT_SUM/LAT_N)) || echo '—' ) ms, max ${LAT_MAX} ms)" \
       "$( [ -n "$p" ] && echo ok || echo err )"
@@ -322,52 +410,40 @@ draw_stability() {
 }
 
 # ---------------------------------------------------------------- 4. internet
-DNS_MS=""; HTTP_OK=0; HTTP_N=0; HTTP_AVG=""; DOWN_MBPS=""
+NET_DONE=0
 
-internet_run() {
+internet_screen() {   # what has been checked so far
   tui_frame "Wireless - internet" "please wait"
-  tui_line 8 "Checking DNS, reachability and throughput..." ""
+  tui_line 8 "Checking the internet, DNS and secure web through this card..." ""
+  local row=10
+  [ -n "$NC_TCP" ] && { tui_kv $row "Internet" "ping $NC_ICMP, web $NC_TCP" "$( [ "$NC_TCP" = yes ] && echo ok || echo err )"; row=$((row+1)); }
+  [ -n "$NC_DNS_DIRECT" ] && { tui_kv $row "DNS" "network's $(nc_dns_text net), 1.1.1.1 $(nc_dns_text direct)" \
+                                 "$( [ "$NC_DNS_NET" = ok ] && echo ok || echo warn )"; row=$((row+1)); }
+  [ -n "$NC_HTTPS" ] && { tui_kv $row "Secure web" "$( [ "$NC_HTTPS" = yes ] && echo works || echo fails )$( [ "$NC_PORTAL" = yes ] && echo " - a login page is in the way" )" \
+                            "$( [ "$NC_HTTPS" = yes ] && echo ok || echo warn )"; row=$((row+1)); }
+  [ -n "$1" ] && tui_line $((row+1)) "$1" muted
   tui_flush
+}
+
+# Everything through this card (netcheck.sh): with a cable plugged in, the
+# old lookups and downloads went out over the cable and timed the wrong link.
+internet_run() {
+  internet_screen
   tui_anim_live wifi 4 4
-
-  # DNS: time a handful of lookups the way the netprobe page does.
-  local t0 t1 n ok=0 sum=0
-  for n in www.google.com cloudflare.com github.com; do
-    t0=$(date +%s%N)
-    if getent hosts "$n" >/dev/null 2>&1; then
-      t1=$(date +%s%N); sum=$(( sum + (t1-t0)/1000000 )); ok=$((ok+1))
-    fi
-  done
-  [ "$ok" -gt 0 ] && DNS_MS=$(( sum / ok ))
-  ev INFO "DNS: $ok/3 lookups OK${DNS_MS:+, median ${DNS_MS} ms}"
-
-  # HTTPS latency to a few endpoints.
-  local url sum2=0
-  for url in https://www.google.com/generate_204 https://1.1.1.1/cdn-cgi/trace https://github.com/; do
-    HTTP_N=$((HTTP_N+1))
-    t0=$(date +%s%N)
-    if curl -s -o /dev/null --max-time 6 "$url" 2>/dev/null; then
-      t1=$(date +%s%N); sum2=$(( sum2 + (t1-t0)/1000000 )); HTTP_OK=$((HTTP_OK+1))
-    fi
-  done
-  [ "$HTTP_OK" -gt 0 ] && HTTP_AVG=$(( sum2 / HTTP_OK ))
-  ev INFO "HTTPS: $HTTP_OK/$HTTP_N endpoints answered${HTTP_AVG:+, avg ${HTTP_AVG} ms}"
-
-  # Throughput: one stream, indicative rather than a benchmark.
-  if [ "$HTTP_OK" -gt 0 ]; then
-    tui_line 10 "Measuring download speed..." muted; tui_flush
-    local bytes=20000000 start end
-    start=$(date +%s%N)
-    local got
-    got=$(curl -s -o /dev/null -w '%{size_download}' --max-time 15 \
-          "https://speed.cloudflare.com/__down?bytes=$bytes" 2>/dev/null)
-    end=$(date +%s%N)
-    local ms=$(( (end-start)/1000000 ))
-    if [ "${got:-0}" -gt 1000000 ] && [ "$ms" -gt 0 ]; then
-      DOWN_MBPS=$(awk -v b="$got" -v m="$ms" 'BEGIN{printf "%.1f", b*8/(m/1000)/1000000}')
-      ev INFO "download ${DOWN_MBPS} Mbit/s"
-    fi
-  fi
+  # the router was pinged all through the stability watch: no need to again
+  if [ -z "$GATEWAY" ]; then NC_GW_STATE=none
+  elif [ "$PING_SENT" -gt 0 ] && [ "$LAT_N" = 0 ]; then NC_GW_STATE=lost
+  else NC_GW_STATE=ok; fi
+  nc_internet "$IFACE";                                          internet_screen
+  nc_dns "$IFACE" "/var/lib/dhcp/dhclient.$IFACE.leases";        internet_screen
+  nc_portal "$IFACE"; nc_https "$IFACE"
+  internet_screen "Measuring download speed..."
+  [ "$NC_TCP" = yes ] && nc_download "$IFACE" 20000000
+  [ -n "$NC_DOWN_MBPS" ] && ev INFO "download ${NC_DOWN_MBPS} Mbit/s"
+  nc_clock
+  nc_cause wifi
+  ev INFO "internet: $NC_CAUSE"
+  NET_DONE=1
 }
 
 # ---------------------------------------------------------------- verdict
@@ -378,6 +454,11 @@ decide() {
   [ "$RSSI_N" -gt 0 ] && avg_rssi=$(( RSSI_SUM / RSSI_N ))
   local loss=0
   [ "$PING_SENT" -gt 0 ] && loss=$(( PING_LOST * 100 / PING_SENT ))
+  # Antennas compared only over enough samples: one reading taken while a
+  # hand passed over the lid is not a broken lead.
+  local gap=0 rp=""
+  [ "$CH_N" -ge 5 ] && gap=$(chain_gap)
+  rp=$(retry_pct)
 
   if [ "$DROPS" -gt 0 ]; then
     STATE=FAIL
@@ -391,6 +472,10 @@ decide() {
     STATE=FAIL
     CAUSE="Signal is very weak (average $avg_rssi dBm)"
     ACTION="At this level, next to an access point, suspect a disconnected or damaged antenna lead - the commonest fault after a screen or hinge repair. Open the lid hinge covers and check both U.FL connectors are seated on the card."
+  elif [ "$gap" -ge 20 ]; then
+    STATE=FAIL
+    CAUSE="One antenna is $gap dB weaker than the other ($(chain_avg))"
+    ACTION="Two antennas side by side differ by a few dB; $gap dB means one lead is off, pinched in the hinge or broken. The overall signal can still look fine, so the old check missed this. Check both U.FL connectors (main and aux) on the card, then the leads up through the hinge."
   elif [ "$loss" -gt 5 ]; then
     STATE=FAIL
     CAUSE="${loss}% of pings to the gateway were lost"
@@ -399,6 +484,14 @@ decide() {
     STATE=WARN
     CAUSE="Signal is weak (average $avg_rssi dBm)"
     ACTION="Usable but marginal. If the machine is near the access point, check the antenna leads before returning it."
+  elif [ "$gap" -ge 12 ]; then
+    STATE=WARN
+    CAUSE="The antennas are $gap dB apart ($(chain_avg))"
+    ACTION="More than the few dB two healthy antennas differ by. Check the weaker lead's U.FL connector is fully clicked on, and that the lead is not pinched in the hinge."
+  elif [ -n "$rp" ] && [ "$rp" -gt 30 ]; then
+    STATE=WARN
+    CAUSE="$rp % of frames had to be sent again"
+    ACTION="The link holds but retries a lot: interference on this channel, or a weak antenna. Retest on a 5 GHz network; if it persists next to the access point, check the antenna leads."
   elif [ "$loss" -gt 0 ]; then
     STATE=WARN
     CAUSE="${loss}% packet loss to the gateway"
@@ -451,27 +544,30 @@ write_report() {
     rsilent "$(printf '%-30s %s' "Signal best / worst" "$RSSI_MAX / $RSSI_MIN dBm")"
     rsilent "$(printf '%-30s %s' "Link drops"         "$DROPS")"
     rsilent "$(printf '%-30s %s' "Roams between APs"  "$ROAMS")"
+    rsilent "$(printf '%-30s %s' "Link"               "${LINK_KIND:-not reported by the driver}")"
+    rsilent "$(printf '%-30s %s' "Card antennas"      "$(card_chains "$i" | sed 's/^0$/not reported/')")"
+    rsilent "$(printf '%-30s %s' "Signal per antenna" "$( [ "$CH_N" -gt 0 ] && echo "$(chain_avg), $(chain_gap) dB apart" || echo "not reported by the driver")")"
+    local rp; rp=$(retry_pct) \
+      && rsilent "$(printf '%-30s %s' "Retried frames"  "$rp % ($((RT1 - RT0)) of $((TX1 - TX0)))${FL1:+, $((FL1 - FL0)) failed outright}")"
     if [ "$PING_SENT" -gt 0 ]; then
       rsilent "$(printf '%-30s %s' "Gateway pings"    "$PING_SENT sent, $PING_LOST lost (${loss}%)")"
       [ "$LAT_N" -gt 0 ] && \
       rsilent "$(printf '%-30s %s' "Gateway latency"  "avg $((LAT_SUM/LAT_N)) ms, worst $LAT_MAX ms")"
     fi
     rsilent ""
-    rsilent "--- signal trace (seconds : dBm : Mbit/s : ping ms) ---"
+    rsilent "--- signal trace (seconds : dBm : Mbit/s : ping ms : each antenna) ---"
     local rows every
     rows=$(wc -l < "$SAMPLES" 2>/dev/null || echo 0)
     every=$(( rows / 40 )); [ "$every" -lt 1 ] && every=1
     awk -F'\t' -v n="$every" 'NR % n == 1 || n == 1 {
-        printf "  %4ds   %5s dBm   %7s   %s\n", $1, ($2==""?"--":$2), ($3==""?"--":$3), ($6==""?"lost":$6" ms") }' \
+        printf "  %4ds   %5s dBm   %7s   %-8s %s\n", $1, ($2==""?"--":$2), ($3==""?"--":$3), ($6==""?"lost":$6" ms"), $7 }' \
         "$SAMPLES" >> "$REPORT_TXT"
   fi
 
-  if [ "$HTTP_N" -gt 0 ]; then
+  if [ "$NET_DONE" = 1 ]; then
     rsilent ""
-    rsilent "--- internet ---"
-    rsilent "$(printf '%-30s %s' "DNS lookups"     "${DNS_MS:+avg ${DNS_MS} ms}${DNS_MS:-all failed}")"
-    rsilent "$(printf '%-30s %s' "HTTPS endpoints" "$HTTP_OK of $HTTP_N answered${HTTP_AVG:+, avg ${HTTP_AVG} ms}")"
-    rsilent "$(printf '%-30s %s' "Download"        "${DOWN_MBPS:-not measured}${DOWN_MBPS:+ Mbit/s}")"
+    rsilent "--- internet, through $i ---"
+    nc_report
   fi
 
   rsilent ""
@@ -509,12 +605,23 @@ show_verdict() {
   local row=10
   [ -n "$avg_rssi" ] && { tui_kv $row "Signal average" "$avg_rssi dBm ($(rssi_verdict "$avg_rssi"))"; row=$((row+1)); }
   [ "$PING_SENT" -gt 0 ] && { tui_kv $row "Packets lost" "$PING_LOST of $PING_SENT"; row=$((row+1)); }
-  tui_kv $row "Link drops" "$DROPS"; row=$((row+2))
+  tui_kv $row "Link drops" "$DROPS"; row=$((row+1))
+  [ "$CH_N" -gt 0 ] && { tui_kv $row "Each antenna" "$(chain_avg), $(chain_gap) dB apart"; row=$((row+1)); }
+  if [ "$NET_DONE" = 1 ]; then
+    tui_kv $row "Internet" "$NC_CAUSE" "$( [ "$NC_STATE" = PASS ] && echo ok || echo warn )"; row=$((row+1))
+    [ "$NC_CLOCK_STATE" = wrong ] && { tui_kv $row "Clock" "$NC_CLOCK_TEXT - CMOS battery?" warn; row=$((row+1)); }
+  fi
+  row=$((row+1))
   local l
   while IFS= read -r l; do
     [ $row -gt 21 ] && break
     tui_line $row "$l" ""; row=$((row+1))
   done < <(printf '%s\n' "$ACTION" | fold -s -w 72)
+  # A network-side problem is named with what to do, but it does not fail
+  # the card: the card got the traffic as far as the router and back.
+  if [ "$NET_DONE" = 1 ] && [ -n "$NC_ACTION" ] && [ $row -le 19 ]; then
+    row=$(tui_para $((row+1)) "Internet: $NC_ACTION" "$( [ "$NC_SIDE" = network ] && echo muted || echo warn )")
+  fi
   tui_flush
   tui_anykey
 }

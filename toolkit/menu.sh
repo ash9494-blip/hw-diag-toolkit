@@ -107,7 +107,8 @@ full_run() {
     "2.  $diskline" \
     "3.  CPU stress and temperature log              about 10 min" \
     "4.  RAM stress test                             about 5 min" \
-    "5.  Save the report" \
+    "5.  Hardware error log - what the tests shook out" \
+    "6.  Save the report" \
     "" \
     "Nothing is written to the tested drive. Each stage stops with Q." \
     "" "Start now?" || return
@@ -135,6 +136,8 @@ full_run() {
 
   AUTO=1 /opt/diag/cputest.sh auto 10
   AUTO=1 /opt/diag/ramtest.sh auto 5
+  # Last: what the stress tests shook loose into the kernel log.
+  /opt/diag/errlog.sh --quiet
 
   tui_frame "Full run complete" "Enter to save the report"
   local row=6 l
@@ -248,6 +251,9 @@ run_test() {   # one dispatcher, so both layouts stay in step
     usb)      /opt/diag/usbtest.sh ;;
     charging) /opt/diag/chargetest.sh ;;
     camera)   /opt/diag/cameratest.sh ;;
+    sdcard)   /opt/diag/sdtest.sh ;;
+    lid)      /opt/diag/lidtest.sh ;;
+    errlog)   /opt/diag/errlog.sh ;;
     network)  /opt/diag/nettest.sh ;;
     system)   /opt/diag/sysinfo.sh ;;
     dmi)      /opt/diag/dmicapture.sh ;;
@@ -257,8 +263,9 @@ run_test() {   # one dispatcher, so both layouts stay in step
   esac
 }
 
+# New tiles go at the end: the numbers already in Ash's hands stay put.
 peripherals_menu() {
-  local acts=(all screen touchpad touchscreen sound usb charging camera network wireless drivers)
+  local acts=(all screen touchpad touchscreen sound usb charging camera network wireless drivers sdcard lid)
   while :; do
     tui_grid "Peripherals" "arrows to move, Enter to select      Q = back" \
       "Run them all|grid" \
@@ -271,10 +278,12 @@ peripherals_menu() {
       "Camera|camera|$(test_result CAMERA_RESULT)" \
       "Ethernet Network|network|$(test_result ETHERNET_RESULT)" \
       "Wireless test|wifi|$(test_result WIFI_RESULT)" \
-      "Driver check|download|$(test_result DRIVER_RESULT)" || return
+      "Driver check|download|$(test_result DRIVER_RESULT)" \
+      "SD card|sdcard|$(test_result SD_RESULT)" \
+      "Lid sensor|lid|$(test_result LID_RESULT)" || return
     if [ "${acts[$((TUI_CHOICE-1))]}" = all ]; then
       local t
-      for t in screen touchpad touchscreen sound usb charging camera network wireless; do run_test "$t"; done
+      for t in screen touchpad touchscreen sound usb charging camera network wireless sdcard lid; do run_test "$t"; done
     else
       run_test "${acts[$((TUI_CHOICE-1))]}"
     fi
@@ -282,7 +291,7 @@ peripherals_menu() {
 }
 
 compact_menu() {
-  local acts=(fullrun disk cpu ram battery keyboard peripherals showall wificonnect drivers dmi results save shell system settings)
+  local acts=(fullrun disk cpu ram battery keyboard peripherals showall wificonnect drivers dmi results save shell system settings errlog)
   tui_grid "Choose a test" "arrows or its number (two digits for 10+), Enter to select      Q = power menu" \
     "Full run|play" \
     "HDD / SSD|disk|$(test_result DISK_RESULT DISK_CTRL DISK_SELFTEST DISK_SMART)" \
@@ -292,7 +301,7 @@ compact_menu() {
     "Keyboard|keyboard|$(test_result KEYBOARD_RESULT)" \
     "Peripherals|grid" "Show all tests|expand" "Wi-Fi|wifi" \
     "Driver check|download|$(test_result DRIVER_RESULT)" "DMI capture|chip" "Results|list" "Save report|save" "Command prompt|terminal" \
-    "System|info" "Settings|gear" || return 1
+    "System|info" "Settings|gear" "Error log|log|$(test_result ERRLOG_RESULT)" || return 1
   case "${acts[$((TUI_CHOICE-1))]}" in
     peripherals) peripherals_menu ;;
     showall)     set_layout all ;;
@@ -302,7 +311,7 @@ compact_menu() {
 }
 
 expanded_menu() {
-  local acts=(fullrun disk cpu ram battery keyboard screen touchpad touchscreen sound usb charging camera network wificonnect wireless drivers dmi results save shell system settings)
+  local acts=(fullrun disk cpu ram battery keyboard screen touchpad touchscreen sound usb charging camera sdcard lid network wificonnect wireless drivers errlog dmi results save shell system settings)
   tui_grid "Every test" "arrows or its number, Enter to select      Q = back to the short list" \
     "Full run|play" \
     "HDD / SSD|disk|$(test_result DISK_RESULT DISK_CTRL DISK_SELFTEST DISK_SMART)" \
@@ -315,9 +324,11 @@ expanded_menu() {
     "Sound|sound|$(test_result SOUND_RESULT)" \
     "USB ports|usb|$(test_result USB_RESULT)" "Charging|charge|$(test_result CHARGE_RESULT)" \
     "Camera|camera|$(test_result CAMERA_RESULT)" \
+    "SD card|sdcard|$(test_result SD_RESULT)" "Lid sensor|lid|$(test_result LID_RESULT)" \
     "Ethernet Network|network|$(test_result ETHERNET_RESULT)" "Wi-Fi|wifi" \
     "Wireless test|wifi|$(test_result WIFI_RESULT)" \
-    "Driver check|download|$(test_result DRIVER_RESULT)" "DMI capture|chip" \
+    "Driver check|download|$(test_result DRIVER_RESULT)" \
+    "Error log|log|$(test_result ERRLOG_RESULT)" "DMI capture|chip" \
     "Results|list" "Save report|save" "Command prompt|terminal" \
     "System|info" "Settings|gear" \
     || { set_layout compact; return 0; }

@@ -62,8 +62,37 @@ THEMES = {
         WARN_=(255, 214, 0),  WARN_SOFT=(56, 46, 0),
         FAIL_=(255, 80, 80),  FAIL_SOFT=(64, 0, 0),
         SHADOW=(0, 0, 0)),
+    # The two anime themes (1.20) are whole skins, drawn by skins.py: these are
+    # only their shared colour roles. Every text colour keeps 4.5:1 or better
+    # on the ground it sits on.
+    "mecha": dict(
+        GROUND=(11, 11, 13),   PAPER=(22, 22, 26),    INK=(236, 236, 232),
+        MUTED=(150, 150, 160), LINE=(62, 62, 72),     ACCENT=(255, 106, 0),
+        PASS_=(57, 217, 138), PASS_SOFT=(14, 50, 34),
+        WARN_=(255, 196, 0),  WARN_SOFT=(58, 46, 0),
+        FAIL_=(255, 92, 80),  FAIL_SOFT=(70, 16, 14),
+        SHADOW=(0, 0, 0)),
+    # white sits on ACCENT (selected rows) and PASS_ (stamps) here: both are
+    # dark enough for 5:1 - the first violet and green were 4.3:1
+    "kawaii": dict(
+        GROUND=(255, 228, 238), PAPER=(255, 255, 255), INK=(59, 33, 66),
+        MUTED=(118, 86, 126),  LINE=(246, 186, 210),  ACCENT=(108, 74, 240),
+        PASS_=(16, 124, 88),  PASS_SOFT=(222, 247, 236),
+        WARN_=(160, 92, 0),   WARN_SOFT=(255, 240, 214),
+        FAIL_=(200, 32, 60),  FAIL_SOFT=(255, 226, 232),
+        SHADOW=(217, 204, 255)),
 }
 THEME_NAME = "light"
+
+# Themes that are a whole skin rather than a palette: skins.py draws the
+# header, card, home grid, menus, badges, bars and choices while one is on.
+THEME_SKIN = {"mecha": "mecha", "kawaii": "kawaii"}
+SKIN = None
+try:
+    import skins
+except Exception as e:                  # a broken skin must never stop the toolkit
+    skins = None
+    sys.stderr.write("ui: skins unavailable (%s)\n" % e)
 
 # Multiplies every font size and the row pitch with it, so the layout keeps its
 # proportions instead of text overflowing boxes that stayed put.
@@ -114,11 +143,12 @@ def load_settings():
 def apply_theme(name):
     """Rebind the palette globals. Everything draws from these by name, so a
     rebind is all it takes - no colour is cached anywhere else."""
-    global THEME_NAME, TONES
+    global THEME_NAME, TONES, BADGE, SKIN
     pal = THEMES.get(name)
     if not pal:
         return False
     THEME_NAME = name
+    SKIN = THEME_SKIN.get(name) if skins else None
     g = globals()
     for k, v in pal.items():
         g[k] = v
@@ -127,6 +157,9 @@ def apply_theme(name):
         "dim":    g["MUTED"], "ok": g["PASS_"],   "warn":  g["WARN_"],
         "err":    g["FAIL_"], "accent": g["ACCENT"],
     }
+    # Badges too: built once at import, they kept the light theme's colours
+    # under dark and contrast until 1.20.
+    BADGE = _badges()
     _STENCIL_CACHE.clear()      # icons are baked in the old colour
     _BRAND_CACHE.clear()
     return True
@@ -141,12 +174,15 @@ TONES = {
     "":       INK,   "fg": INK,     "muted": MUTED, "dim": MUTED,
     "ok":     PASS_, "warn": WARN_, "err":   FAIL_, "accent": ACCENT,
 }
-BADGE = {
-    "PASS": (PASS_, PASS_SOFT), "OK": (PASS_, PASS_SOFT),
-    "WARN": (WARN_, WARN_SOFT), "MARGINAL": (WARN_, WARN_SOFT),
-    "STOPPED": (WARN_, WARN_SOFT), "PARTIAL": (WARN_, WARN_SOFT),
-    "FAIL": (FAIL_, FAIL_SOFT), "UNKNOWN": (MUTED, GROUND),
-}
+def _badges():
+    return {
+        "PASS": (PASS_, PASS_SOFT), "OK": (PASS_, PASS_SOFT),
+        "WARN": (WARN_, WARN_SOFT), "MARGINAL": (WARN_, WARN_SOFT),
+        "STOPPED": (WARN_, WARN_SOFT), "PARTIAL": (WARN_, WARN_SOFT),
+        "FAIL": (FAIL_, FAIL_SOFT), "UNKNOWN": (MUTED, GROUND),
+    }
+
+BADGE = _badges()
 
 RADIUS = 20
 
@@ -645,6 +681,27 @@ def _icon(name, d, cx, cy, size, col):
         circ(7.5, 6.6, 1.5, fill=col)
         pl([(12, 16), (16.5, 12.5), (16.5, 11)])
         solidbox(15.1, 8.4, 17.9, 11.0, 0.6)
+
+    elif name == "sdcard":                                # SD card reader
+        # the card's own outline - the clipped corner says SD at a glance
+        pl([(6, 21), (6, 7.2), (10.2, 3), (18, 3), (18, 21)], close=True)
+        for x in (10.6, 13.2, 15.8):
+            ln(x, 6, x, 9)
+
+    elif name == "lid":                                   # lid sensor
+        # a laptop half open, the lid tilted back over its base
+        pl([(4.5, 17), (8.5, 4.5), (20.5, 4.5), (16.5, 17)], close=True)
+        ln(2.5, 19.5, 21.5, 19.5)
+        ln(16.5, 17, 18.6, 19.5)
+
+    elif name == "log":                                   # hardware error log
+        # the kernel's log, one line flagged
+        for y in (6, 10.5, 15):
+            ln(3.5, y, 12.5, y)
+        ln(3.5, 19.5, 9.5, 19.5)
+        pl([(17.5, 7.5), (22, 18.5), (13, 18.5)], close=True)
+        ln(17.5, 11.5, 17.5, 14.6)
+        dot(17.5, 16.6, 0.9)
 
     # ---------------------------------------------------------------- camera
     elif name == "camera":
@@ -1194,6 +1251,8 @@ class Screen:
         return self.M, self.hdr, self.W - self.M, self.H - self.ftr
 
     def _card(self, d):
+        if SKIN:
+            return skins.card(self, sys.modules[__name__], d)
         x0, y0, x1, y1 = self._card_box()
         d.rounded_rectangle([x0, y0 + int(3 * self.s), x1, y1 + int(3 * self.s)],
                             self.radius, fill=SHADOW)
@@ -1241,6 +1300,8 @@ class Screen:
             self.render()
 
     def _draw_header(self, img, d):
+        if SKIN:
+            return skins.header(self, sys.modules[__name__], img, d)
         s = self.s
         cy = self.hdr // 2
         r = int(7 * s)
@@ -1267,6 +1328,8 @@ class Screen:
 
     def render(self):
         self.mode = "card"
+        if SKIN:
+            return skins.render(self, sys.modules[__name__])
         if LOOK == "manual" and any(it[0] == "menu" for it in self.items):
             return self._render_sheet_menu()
         img = Image.new("RGB", (self.W, self.H), GROUND)
@@ -1478,14 +1541,20 @@ class Screen:
             cy = top + (rh - vgap) // 2
             self.menu_rows.append((i, [left - int(14 * s), top,
                                        right + int(14 * s), top + rh - vgap]))
-            if i == sel:
+            if SKIN:
+                # the skin draws the row's ground and its number
+                nc, dc = skins.menu_row(self, sys.modules[__name__], d,
+                                        [left - int(14 * s), top, right + int(14 * s), top + rh - vgap],
+                                        i == sel, i + 1, left, cy)
+            elif i == sel:
                 d.rounded_rectangle([left - int(14 * s), top,
                                      right + int(14 * s), top + rh - vgap],
                                     max(4, self.radius // 2), fill=ACCENT)
                 nc, dc, ic = PAPER, (219, 231, 255), (219, 231, 255)
+                d.text((left, cy), str(i + 1), font=self.f_mono, fill=ic, anchor="lm")
             else:
                 nc, dc, ic = INK, MUTED, MUTED
-            d.text((left, cy), str(i + 1), font=self.f_mono, fill=ic, anchor="lm")
+                d.text((left, cy), str(i + 1), font=self.f_mono, fill=ic, anchor="lm")
             d.text((namex, cy), self._clip(d, name, self.f_bodyb, namew),
                    font=self.f_bodyb, fill=nc, anchor="lm")
             for k, v in enumerate(cells[i]):
@@ -1893,6 +1962,8 @@ class Screen:
         d = ImageDraw.Draw(img)
         self.mode = "grid"
         self._grid_args = (sel, entries)
+        if SKIN:
+            return skins.render_grid(self, sys.modules[__name__], sel, entries)
         if LOOK == "manual":
             return self._render_sheet_grid(sel, entries)
         self._draw_header(img, d)
@@ -1951,7 +2022,7 @@ class Screen:
                 redraw = False
 
     def _grid_hit(self, n, xy):
-        if LOOK == "manual" and getattr(self, "grid_boxes", None):
+        if (LOOK == "manual" or SKIN) and getattr(self, "grid_boxes", None):
             return next((i for i, b in enumerate(self.grid_boxes[:n]) if _in(b, xy)), None)
         cols, tile, gap, gx, gy = self._grid_geometry(n)
         for i in range(n):
@@ -1971,7 +2042,10 @@ class Screen:
         redraw = True
         while True:
             # arrow keys move by the columns actually on screen
-            cols = self._sheet_cols(entries) if LOOK == "manual" else self._grid_geometry(n)[0]
+            if SKIN:
+                cols = skins.grid_cols(self, sys.modules[__name__], entries)
+            else:
+                cols = self._sheet_cols(entries) if LOOK == "manual" else self._grid_geometry(n)[0]
             if redraw:
                 self.render_grid(sel, entries)
             redraw = True

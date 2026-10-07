@@ -38,7 +38,14 @@ TUI_COLS=120; TUI_ROWS=30; TUI_W=110; TUI_PAD=2
 TUI_CHOICE=0; TUI_TEXT=""; TUI_TITLE=""; TUI_SUB=""
 
 exec 9>"$UI_CMD"
-_s() { printf '%s\n' "$(printf '%s\t' "$@" | sed 's/\t$//')" >&9; }
+# One command per line, fields split by TAB - so a TAB or newline inside a
+# value (kernel files pad with TABs) cut the line and blanked the field: the
+# SD test's "Bus mode" (1.20). Both become spaces here, whatever the caller.
+_s() {
+  local a f=()
+  for a in "$@"; do a=${a//$'\t'/ }; f+=("${a//$'\n'/ }"); done
+  printf '%s\n' "$(printf '%s\t' "${f[@]}" | sed 's/\t$//')" >&9
+}
 _ask() {
   _s "$@"
   UI_ANS=$(timeout 7200 head -n1 "$UI_REPLY" 2>/dev/null)

@@ -29,6 +29,8 @@ theme_label() {
     light)    printf 'Light  - white cards, best in a bright workshop' ;;
     dark)     printf 'Dark   - easier at night or in a dim room' ;;
     contrast) printf 'High contrast - black and white, for a failing panel' ;;
+    mecha)    printf 'Mecha command deck - anime, black deck and orange bays' ;;
+    kawaii)   printf 'Kawaii pastel - anime, pink sticker sheet' ;;
     *)        printf '%s' "$1" ;;
   esac
 }
@@ -49,9 +51,11 @@ set_theme() {
   tui_menu "Colour theme" "currently: $(theme_label "$cur")" \
     "Light|white cards on pale grey - the default" \
     "Dark|dark cards, much easier on the eyes at night" \
-    "High contrast|black and white, for a dim or failing screen" || return
+    "High contrast|black and white, for a dim or failing screen" \
+    "Mecha command deck|anime: a black launch deck, every test a bay with a status lamp" \
+    "Kawaii pastel|anime: a pink sticker sheet, results as reward stamps" || return
   local t
-  case "$TUI_CHOICE" in 1) t=light ;; 2) t=dark ;; 3) t=contrast ;; esac
+  case "$TUI_CHOICE" in 1) t=light ;; 2) t=dark ;; 3) t=contrast ;; 4) t=mecha ;; 5) t=kawaii ;; esac
   put theme "$t"
   tui_setting theme "$t"
   # Redraw something so the change is visible straight away rather than at the
