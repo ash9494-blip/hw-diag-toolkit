@@ -1135,6 +1135,7 @@
 "New partition - which kind?": "새 파티션 - 어떤 종류?",
 "New partition {4} ({5}), {6}, {7} - made empty after the copy": "새 파티션 {4} ({5}), {6}, {7} - 복사 후 비어 있음",
 "New partition {4}, {6}, {7} - made empty after the copy": "새 파티션 {4}, {6}, {7} - 복사 후 비어 있음",
+"New partition {3}, {4}, {5} - made empty after the copy": "새 파티션 {3}, {4}, {5} - 복사 후 비어 있음",
 "New partition {4}{5}, {6}, {7}": "새 파티션 {4}{5}, {6}, {7}",
 "Newest entry": "최신 항목",
 "Next to the AP": "AP 바로 옆",

@@ -1135,6 +1135,7 @@
 "New partition - which kind?": "新建分区 - 选择哪种文件系统？",
 "New partition {4} ({5}), {6}, {7} - made empty after the copy": "新分区 {4}（{5}），{6}，{7} - 复制后为空",
 "New partition {4}, {6}, {7} - made empty after the copy": "新分区 {4}，{6}，{7} - 复制后为空",
+"New partition {3}, {4}, {5} - made empty after the copy": "新分区 {3}，{4}，{5} - 复制后为空",
 "New partition {4}{5}, {6}, {7}": "新分区 {4}{5}，{6}，{7}",
 "Newest entry": "最新条目",
 "Next to the AP": "靠近接入点",
