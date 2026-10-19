@@ -5,8 +5,8 @@ Bootable USB/ISO for bench-testing laptops at Data Dynamics (Johor). Owner: Ash
 minimal Ubuntu live system straight into a full-screen tile menu of hardware
 tests, and writes a per-machine report to the USB stick.
 
-**Current version: 1.23.0** (`toolkit/lib.sh` → `DIAG_VERSION`).
-Last delivered ISO: 1.23.0, SHA256 `6187c4e0bc0e37852919a022ba819ddf6ed5210415585d2258d32247034df773`.
+**Current version: 1.24.0** (`toolkit/lib.sh` → `DIAG_VERSION`).
+Last delivered ISO: 1.24.0, SHA256 `263f4e054e72f79610039f65c4acf424a1ff175886d56409e75e61ae88613069`.
 Version history and the reasoning behind past changes: `docs/HISTORY.md`.
 
 ## Layout
@@ -40,7 +40,12 @@ toolkit/            everything that ends up in /opt/diag on the image
   errlog.sh         Hardware error log: kernel-log fault rules (--quiet in Full run)
   sdtest.sh         SD card reader; lidtest.sh lid + tablet-mode switch
   swstate.py        input switch states (lid, tablet, jacks) via EVIOCGSW
-  imaging.sh        Disk imaging screens (tile 7): clone, back up, restore,
+  gputest.sh        GPU check (tile 5): every graphics chip, the discrete one
+                    woken; PCIe link lanes, AER counters, kernel log - no
+                    GPU driver (invariant 1); --quiet in Full run
+  fantest.sh        Fan test (Peripherals 14): CPU load, fan rpm where the
+                    laptop reports one, else the technician is asked
+  imaging.sh        Disk imaging screens (tile 8): clone, back up, restore,
                     check; runs imgengine.py in the background (status file)
   imgengine.py      the imaging work: clone / backup / restore / verify,
                     BitLocker unlock, hibernation discard; the shrink-in-
@@ -354,6 +359,13 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   the kernel's table scan needs `blockdev --rereadpt` + `udevadm settle`.
 
 ## Open items
+
+- **1.24.0 fan and GPU on the bench** (VM only: QEMU's VGA, fake sensors
+  via `DIAG_HWMON_ROOT`). GPU: a laptop with a discrete GPU (Optimus /
+  hybrid) - does waking it through power/control bring it out of D3cold, do
+  its link lanes and AER counters read, and does a known-bad board show it.
+  Fan: which bench models report a speed at all (hwmon fan*_input, ACPI
+  `fan_speed_rpm`, Toshiba's `TOS*/fan` switch) - `sensors` on each.
 
 - **1.22.0 on the bench** (VM only): the pointer on a real touchpad and
   mouse (does it feel smooth now - HOVER_SETTLE 60 ms, one-write cursor);

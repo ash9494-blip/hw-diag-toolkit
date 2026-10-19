@@ -3,6 +3,26 @@
 Newest first. Each entry says what changed and why; the "why" is usually a
 real machine on Ash's bench.
 
+## 1.24.0 — 2026-10-19
+- **GPU check** (`gputest.sh`, main page tile 5 after RAM; Ash). Every
+  graphics chip on the PCI bus: the discrete one is woken first (power on,
+  then a live config read with setpci - "does not answer" means a dead chip,
+  not power saving), its PCIe link (lanes: x4 of x8 points at a seat or the
+  solder under the chip; speed is shown, not judged - GPUs slow the link at
+  idle), the PCIe error counters (AER) and the kernel log ("fallen off the
+  bus"). No GPU driver is loaded (invariant 1, the C40-K freeze): Ash chose
+  this over a 3D stress test, which would have needed i915/amdgpu/nouveau and
+  Mesa back in the image. It cannot see 3D speed or the video memory - the
+  screen says so. Also in Full run's first stage (`--quiet`).
+- **Fan test** (`fantest.sh`, Peripherals item 14; Ash). All cores at full
+  load for 2 minutes, then 30 s of rest, watching the fan and the
+  temperature. Where the laptop reports a fan speed (a hwmon fan input, an
+  ACPI 4.0 fan's `fan_speed_rpm`) it decides; most Dynabooks report none, so
+  halfway through the technician is asked whether warm air comes out of the
+  vent (Ash's choice over temperature alone). A fan that turns while the CPU
+  still nears its limit is MARGINAL: dust in the fins or dried paste.
+- Home tiles from 5 on moved up one (Disk imaging is now 8).
+
 ## 1.23.0 — 2026-10-12
 - **Macrium Reflect images** (Ash: "my macrium back up image is not readable,
   means that all of my previous image is failed to load"). Disk imaging now
