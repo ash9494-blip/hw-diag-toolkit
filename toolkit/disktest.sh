@@ -195,26 +195,6 @@ run_cdm() {
     set_kv DISK_RESULT "PASS (burst benchmark, ${seqr} MB/s sequential read)"
   fi
 
-  # A benchmark with no verdict on it makes the reader do the judging, and the
-  # numbers alone do not say whether the drive is healthy. This is deliberately
-  # modest about what it proves: throughput inside the drive's cache, nothing
-  # about sustained writing - that is what the install simulation is for.
-  rsilent ""
-  local seqr; seqr=$(mbps "${RB[0]}")
-  if [ "$aborted" = 1 ]; then
-    rsilent "RESULT: INCOMPLETE -- stopped early by the operator"
-    set_kv DISK_RESULT "INCOMPLETE (stopped early)"
-  elif awk -v v="$seqr" 'BEGIN{exit !(v+0 < 1)}'; then
-    rsilent "RESULT: FAIL -- the drive returned no measurable throughput"
-    set_kv DISK_RESULT "FAIL (no measurable throughput)"
-  else
-    rsilent "RESULT: PASS -- the drive completed every pass without dropping out"
-    rsilent "Note: these are burst figures. Each pass writes for only ${RUNTIME}s, which"
-    rsilent "lands inside the drive's SLC cache. For behaviour under a sustained write -"
-    rsilent "what a Windows install does - run the install simulation."
-    set_kv DISK_RESULT "PASS (burst benchmark, ${seqr} MB/s sequential read)"
-  fi
-
   if [ -s "$RUN_DIR/fio.err" ]; then
     tui_line 17 "fio: $(head -1 "$RUN_DIR/fio.err" | cut -c1-$((TUI_W-10)))" "$ERR"
   fi
@@ -353,96 +333,6 @@ test_raw_rw() {
   rsilent "Drive       : /dev/$DISK  ($(lsblk -dno SIZE,MODEL "/dev/$DISK" | sed 's/  */ /g'))"
   rsilent "Mode        : raw device read + write -- DATA DESTROYED"
   run_cdm "/dev/$DISK" 1 "raw destructive"
-}
-
-# Wear and write/erase cycles.
-#
-# NVMe does not report program/erase cycles directly - no standard SMART field
-# carries them, and the vendor log pages that sometimes do are undocumented. So
-# this works them out from what the drive does publish, and says which figures
-# are measured and which are derived.
-#
-#   Data Units Written  x 512000 bytes  = host bytes written  (measured)
-#   host bytes / capacity              = full drive writes    (derived)
-#   Percentage Used                    = the drive's own wear estimate (measured)
-#
-# Full drive writes is the honest floor for P/E cycles: the flash always writes
-# somewhat more than the host asked for (write amplification), so real cycles
-# are higher - how much higher is not something any tool here can measure. Where
-# the drive reports a non-zero Percentage Used, the two together give a far
-# better answer: the projected total life, and therefore what is left.
-wear_report() {
-  local dev=$1 out=$2
-  local units_w units_r pct cap_b
-  # smartctl prints these as "31,964,933 [16.3 TB]". The bracket is a courtesy
-  # restatement, not part of the number - stripping non-digits across the whole
-  # field glued its digits on the end and made the drive look 1000x more worn
-  # than it is. Cut at the bracket first, then take the digits.
-  smart_int() {
-    printf '%s' "$out" | awk -F: -v k="$1" '
-      index($0, k) { v = substr($0, index($0, ":") + 1)
-                     sub(/\[.*/, "", v); gsub(/[^0-9]/, "", v)
-                     print v; exit }'
-  }
-  units_w=$(smart_int 'Data Units Written')
-  units_r=$(smart_int 'Data Units Read')
-  pct=$(smart_int 'Percentage Used')
-  cap_b=$(disk_bytes "$dev")
-
-  # SATA SSDs put the same idea in vendor attributes instead.
-  if [ -z "$units_w" ]; then
-    local lba_w
-    lba_w=$(printf '%s' "$out" | awk '/Total_LBAs_Written|Host_Writes_32MiB|Total_Writes_GiB/{print $10; exit}')
-    [ -n "$lba_w" ] && units_w=$(( lba_w / 1000 ))
-  fi
-  [ -z "$units_w" ] && [ -z "$pct" ] && return 0      # nothing to work with
-
-  rsilent ""
-  rsilent "--- wear and write cycles ---"
-
-  local tb_w="" dw=""
-  if [ -n "$units_w" ] && [ "$cap_b" -gt 0 ]; then
-    tb_w=$(awk -v u="$units_w" 'BEGIN{printf "%.2f", u*512000/1e12}')
-    dw=$(awk -v u="$units_w" -v c="$cap_b" 'BEGIN{printf "%.1f", (u*512000)/c}')
-    rsilent "$(printf '%-36s %s' "Written over the drive's life"  "$tb_w TB   (measured)")"
-    [ -n "$units_r" ] && rsilent "$(printf '%-36s %s' "Read over the drive's life" \
-      "$(awk -v u="$units_r" 'BEGIN{printf "%.2f", u*512000/1e12}') TB   (measured)")"
-    rsilent "$(printf '%-36s %s' "Equivalent full-drive writes"   "$dw   (derived)")"
-    rsilent "  This is the floor for write/erase cycles per flash cell. The real"
-    rsilent "  number is higher by the drive's write amplification, which is not"
-    rsilent "  something any tool can read out of it."
-  fi
-
-  if [ -n "$pct" ]; then
-    rsilent "$(printf '%-36s %s' "Drive's own wear estimate" "${pct}% used   (measured)")"
-    if [ -n "$dw" ] && [ "$pct" -gt 0 ]; then
-      # If N drive-writes consumed P% of life, the drive is rated for about
-      # N*100/P drive-writes in total. This is the drive's own arithmetic
-      # turned around, and it is the most useful number on the page.
-      local total left
-      total=$(awk -v d="$dw" -v p="$pct" 'BEGIN{printf "%.0f", d*100/p}')
-      left=$(awk -v t="$total" -v d="$dw" 'BEGIN{printf "%.0f", t-d}')
-      rsilent "$(printf '%-36s %s' "Projected total life"  "about $total full-drive writes   (derived)")"
-      rsilent "$(printf '%-36s %s' "Remaining"             "about $left full-drive writes, ~$((100-pct))%   (derived)")"
-    elif [ "$pct" = 0 ]; then
-      rsilent "  0% used - the drive has not worn enough to register yet."
-    fi
-    set_kv DISK_WEAR_PCT "$pct"
-  fi
-  [ -n "$tb_w" ] && set_kv DISK_WRITTEN_TB "$tb_w"
-  [ -n "$dw" ]   && set_kv DISK_DRIVE_WRITES "$dw"
-  W_TB=$tb_w; W_DW=$dw; W_PCT=$pct
-
-  local spare thresh
-  spare=$(printf '%s' "$out" | awk -F: '/Available Spare:/{gsub(/[^0-9]/,"",$2);print $2;exit}')
-  thresh=$(printf '%s' "$out" | awk -F: '/Available Spare Threshold/{gsub(/[^0-9]/,"",$2);print $2;exit}')
-  if [ -n "$spare" ]; then
-    rsilent "$(printf '%-36s %s' "Spare blocks left" "${spare}%, drive warns below ${thresh:-10}%")"
-    if [ -n "$thresh" ] && [ "$spare" -le "$thresh" ]; then
-      rsilent "  WARNING - the drive has used up its replacement blocks. Replace it."
-    fi
-  fi
-  return 0
 }
 
 # Wear and write/erase cycles.
