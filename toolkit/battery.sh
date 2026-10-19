@@ -69,9 +69,41 @@ STATE=""; SAMPLES=""
 state_set() { printf '%s=%s\n' "$1" "$2" >> "$STATE"; sync; }
 state_get() { grep "^$1=" "$STATE" 2>/dev/null | tail -1 | cut -d= -f2-; }
 
+# The log has to outlive the laptop: the test ends when the battery is flat.
+# Only USB sticks are offered (the laptop's own drives are the customer's).
+# With none plugged in, say so before hours of draining (Ash, 1.22) - not
+# after, when the result is already gone.
+NO_SAVE=0
 open_storage() {
-  STORAGE_PROMPT="Where should the battery log be written? (it must survive the shutdown)"
-  pick_storage || return 1
+  local -a places=() labels=()
+  local d
+  while :; do
+    mapfile -t places < <(usb_places)
+    [ ${#places[@]} -gt 0 ] && break
+    tui_menu "No USB stick for the battery log" \
+      "the log will NOT be saved - when the battery runs flat, the result is lost" \
+      "Check again|plug in a USB stick (FAT32, exFAT or NTFS) first" \
+      "Run without saving|the log stays in memory: press Q before it runs flat" || return 1
+    if [ "$TUI_CHOICE" = 2 ]; then
+      NO_SAVE=1
+      mkdir -p "$RUN_DIR/battery"
+      STATE="$RUN_DIR/battery/$(machine_tag).state"
+      SAMPLES="$RUN_DIR/battery/$(machine_tag).csv"
+      rsilent "Battery test: no USB stick - the log was kept in memory only"
+      return 0
+    fi
+  done
+  NO_SAVE=0
+  if [ ${#places[@]} -eq 1 ]; then
+    STORAGE_DEV=${places[0]}
+  else
+    for d in "${places[@]}"; do
+      labels+=("$d|$(lsblk -dno SIZE "$d" 2>/dev/null | tr -d ' ')|$(lsblk -dno FSTYPE "$d" 2>/dev/null | tr -d ' ')|$(lsblk -dno LABEL "$d" 2>/dev/null)")
+    done
+    tui_menu "Where should the battery log be written?" \
+      "it must survive the shutdown - USB sticks only" "${labels[@]}" || return 1
+    STORAGE_DEV=${places[$((TUI_CHOICE-1))]}
+  fi
   if ! mount_storage; then
     tui_msg "Cannot write there" "$STORAGE_DEV could not be mounted for writing." \
       "$(head -1 "$RUN_DIR/mnterr" 2>/dev/null)"
@@ -187,7 +219,11 @@ drain() {
   start_load
 
   local el pct_used rate_wh_h eta used
-  tui_frame "Battery test - step 3 of 3, draining" "Q = stop and analyse now    the log survives a shutdown"
+  if [ "$NO_SAVE" = 1 ]; then
+    tui_frame "Battery test - step 3 of 3, draining" "Q = stop and analyse now    NOT saved: press Q before it runs flat"
+  else
+    tui_frame "Battery test - step 3 of 3, draining" "Q = stop and analyse now    the log survives a shutdown"
+  fi
   # One frame a second: a smooth picture would cost the pack being measured -
   # several watts on an old laptop, and the idle drain would read high.
   tui_anim_live battery 2 2 fps=1
@@ -331,7 +367,9 @@ analyse() {
 # Called at startup by the menu: returns 0 when an unfinished log exists.
 check_unfinished() {
   local d s
-  for d in /dev/disk/by-label/DIAGDATA $(lsblk -rno NAME,FSTYPE 2>/dev/null \
+  # usb_places first: on a Ventoy stick the log went through Ventoy's mapping
+  # of the partition, and the plain device does not even mount
+  for d in $(usb_places) /dev/disk/by-label/DIAGDATA $(lsblk -rno NAME,FSTYPE 2>/dev/null \
         | awk '$2=="vfat"||$2=="exfat"||$2=="ntfs"||$2~/^ext/ {print "/dev/"$1}'); do
     [ -b "$d" ] || continue
     STORAGE_DEV=$d

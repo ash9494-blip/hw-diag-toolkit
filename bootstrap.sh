@@ -18,8 +18,12 @@ trap 'umount -l "$C/dev" "$C/sys" "$C/proc" 2>/dev/null || true' EXIT
 
 export DEBIAN_FRONTEND=noninteractive
 chroot "$C" apt-get update
+# The HWE kernel (Linux 7.0 since 1.21), not noble's original 6.8: 6.8's Wi-Fi
+# driver loads Intel firmware only up to version 86, and 2026 laptops ship
+# firmware from version 101 - the PORTEGE Z40L-P's Wi-Fi stayed "firmware
+# missing" with its firmware on the stick. finalize_chroot.sh asserts >= 7.0.
 chroot "$C" apt-get install -y --no-install-recommends \
-    linux-image-generic live-boot systemd-sysv \
+    linux-image-generic-hwe-24.04 live-boot systemd-sysv \
     fio stress-ng stressapptest memtester \
     smartmontools nvme-cli lm-sensors dmidecode e2fsprogs \
     pciutils kmod util-linux bash coreutils procps \

@@ -150,6 +150,11 @@ def sparkle(d, cx, cy, r, fill, edge=None):
 
 
 def spaced(d, xy, text, font, fill, sp, anchor="lm"):
+    # drawn a letter at a time, so translated whole first (Settings -> Language):
+    # one letter alone matches nothing
+    I = sys.modules.get("i18n")
+    if I is not None:
+        text = I.T(text)
     x, y = xy
     for ch in text:
         d.text((x, y), ch, font=font, fill=fill, anchor=anchor)

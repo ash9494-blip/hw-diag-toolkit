@@ -98,20 +98,8 @@ station() {   # iface
   return 0
 }
 
-# "866.7 MBit/s VHT-MCS 9 80MHz short GI VHT-NSS 2" -> "Wi-Fi 5, 80 MHz, 2 streams"
-link_kind() {   # tx bitrate text
-  printf '%s\n' "$1" | awk '{
-    gen = "Wi-Fi 1-3 (a/b/g)"
-    if ($0 ~ /EHT-/) gen = "Wi-Fi 7"; else if ($0 ~ /HE-/) gen = "Wi-Fi 6"
-    else if ($0 ~ /VHT-/) gen = "Wi-Fi 5"; else if ($0 ~ / MCS /) gen = "Wi-Fi 4"
-    w = 20; if (match($0, /[0-9]+MHz/)) w = substr($0, RSTART, RLENGTH - 3)
-    n = ""
-    if (match($0, /NSS [0-9]+/)) n = substr($0, RSTART + 4, RLENGTH - 4)
-    else if (match($0, / MCS [0-9]+/)) n = int(substr($0, RSTART + 5, RLENGTH - 5) / 8) + 1
-    printf "%s, %s MHz", gen, w
-    if (n != "") printf ", %s stream%s", n, (n == 1 ? "" : "s")
-  }'
-}
+# link_kind (the kind of link from the tx bitrate) lives in lib.sh: System
+# information's More info page shows it too.
 
 card_chains() {   # iface -> how many receive antennas the card has (0 = not said)
   local phy; phy=$(iw dev "$1" info 2>/dev/null | awk '/wiphy/{print $2; exit}')

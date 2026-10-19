@@ -31,6 +31,11 @@ for g in i915 xe amdgpu nouveau radeon; do
   rm -rf "$MOD/drivers/gpu/drm/$g"
 done
 rm -rf "$MOD/zfs" "$MOD/drivers/gpu/drm/amd"
+# Linux 7.0 adds a VFIO variant driver called xe (drivers/vfio/pci/xe: hands an
+# Xe GPU's virtual functions to virtual machines). It cannot load without the
+# xe driver removed above, and its directory name stopped the 1.21 build at
+# build_iso.sh's graphics check - so it goes too.
+rm -rf "$MOD/drivers/vfio/pci/xe"
 
 # ---- dead weight ----------------------------------------------------------
 rm -rf "$C"/usr/share/doc/* "$C"/usr/share/man/* "$C"/usr/share/info/* \

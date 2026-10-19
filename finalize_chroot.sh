@@ -38,6 +38,20 @@ chroot $C apt-get install -y --no-install-recommends udhcpc >/dev/null 2>&1 \
   && echo "backup DHCP client present: udhcpc" \
   || echo "WARN: udhcpc not installed - wifi falls back to dhclient only" >&2
 
+# Disk imaging (imaging.sh): partclone copies used blocks only, ntfs-3g resizes
+# NTFS and reads hiberfil.sys, sgdisk/sfdisk/parted write and save tables,
+# cryptsetup opens BitLocker with the recovery key, dmsetup builds the scratch
+# area a shrink goes through. Every one is needed by some step of a clone, so
+# a missing one aborts here rather than halfway through a customer's drive.
+chroot $C apt-get install -y --no-install-recommends partclone ntfs-3g gdisk fdisk \
+    parted dosfstools exfatprogs cryptsetup-bin dmsetup 2>&1 | tail -2
+for t in partclone.ntfs partclone.vfat partclone.dd partclone.chkimg ntfsresize ntfscat \
+         ntfs-3g sgdisk sfdisk parted wipefs cryptsetup dmsetup mkfs.vfat mkfs.exfat losetup; do
+  chroot $C sh -c "command -v $t" >/dev/null 2>&1 \
+    || { echo "BUILD ABORTED - $t did not install into the image" >&2; exit 1; }
+done
+echo "imaging tools present: partclone ntfs-3g sgdisk sfdisk parted cryptsetup dmsetup"
+
 # The touchpad driver chain. All of it ships in linux-modules(-extra); this is
 # here so a future trim can never quietly take a link out - a missing one
 # looks, on the bench, like a dead touchpad.
@@ -49,6 +63,21 @@ for m in drivers/hid/i2c-hid/i2c-hid-acpi drivers/hid/hid-multitouch \
     || { echo "BUILD ABORTED - touchpad driver missing from the image: $m" >&2; exit 1; }
 done
 echo "touchpad driver chain present"
+
+# The kernel is noble's HWE line (Linux 7.0 since 1.21; see bootstrap.sh) - on
+# 6.8 the newest Intel Wi-Fi had no usable firmware. What the newer machines
+# and disk imaging need from it is asserted, so a kernel change can never
+# quietly drop it: iwlmld (Intel Wi-Fi 7's driver), THC (the touchpad
+# controller on Lunar / Panther Lake), and dm-snapshot, loop, ntfs3 and nbd
+# (Browse an image serves a partition out of the image through it), which
+# imaging builds on.
+case "$K" in [0-6].*) echo "BUILD ABORTED - kernel $K is older than 7.0 (bootstrap.sh installs linux-image-generic-hwe-24.04)" >&2; exit 1 ;; esac
+for m in iwlwifi iwlmld intel-thc intel-quicki2c dm-mod dm-snapshot loop ntfs3 nbd; do
+  find $C/usr/lib/modules/$K -name "$m.ko*" 2>/dev/null | grep -q . \
+    || grep -q "/$m.ko" $C/usr/lib/modules/$K/modules.builtin 2>/dev/null \
+    || { echo "BUILD ABORTED - kernel module missing from the image: $m" >&2; exit 1; }
+done
+echo "kernel $K: Wi-Fi 7 (iwlmld), THC touchpad and imaging modules present"
 
 # Every font the renderer asks for must actually exist.
 #
@@ -75,6 +104,16 @@ for f in /usr/share/fonts/opentype/bebas-neue/BebasNeue-Bold.otf \
   [ -f "$C$f" ] || { echo "BUILD ABORTED - theme font missing from the image: $f" >&2; exit 1; }
 done
 echo "theme fonts present: Bebas Neue + Comfortaa"
+# Settings -> Language (1.21): Chinese, Japanese and Korean are drawn in Noto
+# Sans CJK (i18n.py picks the face). Only the Sans .ttc files are kept - the
+# Serif pair is 53 MB nobody looks at. Without them a CJK string is boxes.
+chroot $C apt-get install -y --no-install-recommends fonts-noto-cjk 2>&1 | tail -1
+rm -f $C/usr/share/fonts/opentype/noto/NotoSerifCJK-*.ttc
+for f in /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc \
+         /usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc; do
+  [ -f "$C$f" ] || { echo "BUILD ABORTED - CJK font missing from the image: $f" >&2; exit 1; }
+done
+echo "language fonts present: Noto Sans CJK (SC, TC, JP, KR)"
 
 # ---- wifi firmware ----
 # linux-firmware whole is 651 MB, nearly all of it GPUs and devices a repair
@@ -147,6 +186,10 @@ install_wifi_firmware
 
 # ---- toolkit ----
 mkdir -p $C/opt/diag
+# The old scripts out first: the chroot outlives each quick build, so a script
+# removed from toolkit/ stayed in the image for ever - getfirmware.sh, gone
+# from the source since 1.15, was still in /opt/diag in 1.23.
+rm -f $C/opt/diag/*.sh $C/opt/diag/*.py
 cp $B/toolkit/*.sh $B/toolkit/*.py $C/opt/diag/
 # The icon artwork is data the renderer loads at draw time, so it has to travel
 # with the scripts. Missing it does not crash anything - _icon_smooth falls back
@@ -158,6 +201,17 @@ chmod +x $C/opt/diag/*.sh $C/opt/diag/*.py
 n=$(ls $C/opt/diag/icons/*.png 2>/dev/null | wc -l)
 [ "$n" -ge 19 ] || { echo "BUILD ABORTED - only $n icon files reached the image" >&2; exit 1; }
 echo "icons installed: $n"
+# The language catalogues travel the same way; i18n.py --check proves each one
+# loads and keeps every {0} its English had (a lost one drops a value from the
+# screen without any error).
+rm -rf $C/opt/diag/i18n
+cp -a $B/toolkit/i18n $C/opt/diag/i18n
+if ! chroot $C python3 /opt/diag/i18n.py --check > /tmp/i18ncheck.out 2>&1; then
+  echo "BUILD ABORTED - a language catalogue is broken:" >&2
+  tail -15 /tmp/i18ncheck.out >&2
+  exit 1
+fi
+cat /tmp/i18ncheck.out
 # When this image was made: the clock check (netcheck.sh) calls a hardware
 # clock set before this date wrong even with no internet to compare against.
 date -u +%s > $C/opt/diag/build-epoch
@@ -232,6 +286,37 @@ if ! chroot $C env DIAG_RUN=/tmp/skincheck python3 /opt/diag/skins.py --check > 
   exit 1
 fi
 cat /tmp/skincheck.out
+# Where every partition goes on a new drive (imgplan.py) is pure arithmetic
+# with a test for each layout the bench meets - run against the image's own
+# Python, so a planner that would put C: in the wrong place never ships.
+cp $B/test/imgplan_test.py $C/tmp/imgplan_test.py
+mkdir -p $C/tmp/test; mv $C/tmp/imgplan_test.py $C/tmp/test/
+# and the partition editor's model (imgparted.py): what may be dragged where,
+# and the order Apply runs the steps in
+cp $B/test/imgparted_test.py $C/tmp/test/
+# and Browse an image's reader: any byte of a partition out of a partclone
+# image in zstd frames (imgbrowse.py) - a wrong offset would show wrong files
+cp $B/test/imgbrowse_test.py $C/tmp/test/
+# Macrium Reflect 7/8 images (mrimg.py) are QuickLZ 1.31 inside, unpacked by
+# libqlz.so - built here on the build host (the chroot has no compiler) from
+# toolkit/vendor/quicklz131.c with its bounds checks on (memory_safe): an
+# image is data from outside. Its test runs in the chroot, so a library the
+# image cannot load stops the build.
+mkdir -p $C/opt/diag/lib
+gcc -O2 -shared -fPIC -DCOMPRESSION_LEVEL=2 -Dmemory_safe \
+    -o $C/opt/diag/lib/libqlz.so $B/toolkit/vendor/quicklz131.c \
+  || { echo "BUILD ABORTED - libqlz.so did not build (gcc: setup-host.sh installs it)" >&2; exit 1; }
+cp $B/test/mrimg_test.py $C/tmp/test/
+ln -sfn /opt/diag $C/tmp/toolkit
+for t in imgplan imgparted imgbrowse mrimg; do
+  if ! chroot $C python3 /tmp/test/${t}_test.py > /tmp/$t.out 2>&1; then
+    echo "BUILD ABORTED - $t.py failed its tests:" >&2
+    tail -15 /tmp/$t.out >&2
+    exit 1
+  fi
+  echo "$t: $(grep -o 'Ran [0-9]* tests' /tmp/$t.out), all passed"
+done
+rm -rf $C/tmp/test $C/tmp/toolkit
 
 # ---- autologin on tty1 and serial ----
 mkdir -p $C/etc/systemd/system/getty@tty1.service.d

@@ -109,6 +109,21 @@ dc_fw_for() {   # device-token... -> first missing file named against any of the
   done | head -1
 }
 
+# The firmware a driver asked for, present on the stick only in versions the
+# driver cannot load: Linux 6.8 asked for iwlwifi-sc-a0-wh-b0-82 while the
+# stick carried 101 to c103 (PORTEGE Z40L-P, 1.21). Fix downloaded the same
+# package again and the screen blamed the card; only a newer kernel helps.
+dc_fw_other_versions() {   # device-token... -> "101, c101, c102" or nothing
+  local t f stem
+  for t in "$@"; do
+    [ -n "$t" ] || continue
+    awk -F'|' -v d="$t" '$1==d && $2 ~ /-[0-9]+\.ucode$/ {print $2}' "$DC_FWMISS"
+  done | sort -u | while IFS= read -r f; do
+    stem=${f%-*}-
+    ls /usr/lib/firmware/ 2>/dev/null | sed -n "s/^${stem}\(c\{0,1\}[0-9][0-9]*\)\.ucode.*/\1/p"
+  done | sort -u | tr '\n' ' ' | sed 's/ $//; s/ /, /g'
+}
+
 # Why a driver is waiting instead of attaching ("deferred probe"): the
 # kernel's own list when debugfs is mounted, else the line it logs when it
 # gives up waiting.
@@ -209,7 +224,12 @@ dc_judge() {   # bus id path type kind name ids modalias none-needed(0|1) [extra
         0) drv=$(dc_driver "$p"); st=LOADED; detail="was not running; started by the driver check" ;;
         1) st=UNBOUND
            local why; why=$(dc_deferred_reason "$id")
-           if [ "$type" = Sound ] && dc_gpu_wait "$why $(dc_errors "$id")"; then
+           if [ "$type" = Bridge ] && [ "$none" = 1 ]; then
+             # a host bridge works with no driver; one that only matches by
+             # chipset family (intel_agp on QEMU's 440FX, Linux 7.0) and does
+             # not take it is not a fault - it was the only "not working" device
+             st=NONE; detail="nothing here needs a driver"
+           elif [ "$type" = Sound ] && dc_gpu_wait "$why $(dc_errors "$id")"; then
              detail="the sound driver is waiting for the Intel graphics driver, which this stick leaves out on purpose"
            elif [ -n "$why" ]; then
              detail="the driver is waiting: $why"
@@ -221,6 +241,11 @@ dc_judge() {   # bus id path type kind name ids modalias none-needed(0|1) [extra
       esac
       if [ -z "$drv" ] && [ -n "$fw" ]; then
         st=FIRMWARE; detail="needs firmware $fw, which is not on the stick"; fix=$(fw_package "$fw")
+        local other; other=$(dc_fw_other_versions "$id" "$@")
+        if [ -n "$other" ]; then
+          detail="its firmware is on the stick (version $other), but the Linux $K driver cannot load it - a newer toolkit is needed, the device is not shown faulty"
+          fix=""
+        fi
       fi
     fi
   fi

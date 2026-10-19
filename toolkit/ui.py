@@ -94,6 +94,21 @@ except Exception as e:                  # a broken skin must never stop the tool
     skins = None
     sys.stderr.write("ui: skins unavailable (%s)\n" % e)
 
+# Settings -> Language (1.21): every string is translated at the font, just
+# before it is measured or drawn - see i18n.py. English when it is missing.
+try:
+    import i18n as I18N
+    I18N.install()
+except Exception as e:
+    I18N = None
+    sys.stderr.write("ui: languages unavailable (%s)\n" % e)
+
+
+def tr(text):
+    """The string as it will be drawn - for code that cuts or wraps it first,
+    which must work on the translation, not on the English."""
+    return I18N.T(text) if I18N is not None else text
+
 # Multiplies every font size and the row pitch with it, so the layout keeps its
 # proportions instead of text overflowing boxes that stayed put.
 TEXT_SCALE = 1.0
@@ -136,6 +151,8 @@ def load_settings():
                 elif k == "textscale":
                     try: TEXT_SCALE = max(0.75, min(2.5, float(v)))
                     except ValueError: pass
+                elif k == "lang" and I18N is not None:
+                    I18N.load(v)
     except OSError:
         pass
 
@@ -313,9 +330,24 @@ class Cursor:
         y = max(0, min(self.fb.h - 1, int(y)))
         if self.visible and (x, y) == (self.x, self.y):
             return
-        self.erase()
+        old = self.drawn
         self.x, self.y = x, y
         self.visible = True
+        if old and self.enabled and self.fb.last is not None:
+            # One write covering where it was and where it is: erasing first
+            # and painting after showed the background in between - the
+            # arrow flickered as it moved - and took two writes.
+            box = self._box()
+            u = (min(old[0], box[0]), min(old[1], box[1]),
+                 max(old[2], box[2]), max(old[3], box[3]))
+            if box[2] > box[0] and box[3] > box[1] and \
+                    (u[2] - u[0]) * (u[3] - u[1]) <= 6 * (box[2] - box[0]) * (box[3] - box[1]):
+                patch = self.fb.last.crop(u).convert("RGB")
+                patch.paste(self.sprite, (box[0] - u[0], box[1] - u[1]), self.sprite)
+                self.fb.blit_region(patch, u[0], u[1])
+                self.drawn = box
+                return
+        self.erase()
         self.paint()
 
     def set_enabled(self, on):
@@ -506,12 +538,17 @@ def _icon_smooth(name, base, cx, cy, size, col):
     lay = _icon_file(name, size, col)
     if lay is None:
         # Not in the supplied set - draw it, oversized then resampled so its
-        # edges match the artwork's own anti-aliasing.
-        S = 4
-        n = size * S
-        lay = Image.new("RGBA", (n, n), (0, 0, 0, 0))
-        _icon(name, ImageDraw.Draw(lay), n / 2.0, n / 2.0, n, col)
-        lay = lay.resize((size, size), Image.LANCZOS)
+        # edges match the artwork's own anti-aliasing. Kept, like the
+        # supplied ones: drawn afresh, five of them cost 20 ms a redraw.
+        key = ("drawn", name, size, tuple(col))
+        lay = _STENCIL_CACHE.get(key)
+        if lay is None:
+            S = 4
+            n = size * S
+            lay = Image.new("RGBA", (n, n), (0, 0, 0, 0))
+            _icon(name, ImageDraw.Draw(lay), n / 2.0, n / 2.0, n, col)
+            lay = lay.resize((size, size), Image.LANCZOS)
+            _STENCIL_CACHE[key] = lay
     base.paste(lay, (int(cx - size // 2), int(cy - size // 2)), lay)
 
 
@@ -593,6 +630,13 @@ def _icon(name, d, cx, cy, size, col):
         ln(3.5, 6, 3.5, 18); ln(20.5, 6, 20.5, 18)
         d.arc([X(3.5), Y(9.5), X(20.5), Y(14.5)], 0, 180, fill=col, width=w)
         d.arc([X(3.5), Y(15.5), X(20.5), Y(20.5)], 0, 180, fill=col, width=w)
+
+    elif name == "clone":                                 # disk imaging
+        # two drives and the copy running from one to the other
+        box(3, 3.5, 13, 10.5, 2.0); dot(10.2, 7, 1.0)
+        box(11, 13.5, 21, 20.5, 2.0); dot(18.2, 17, 1.0)
+        pl([(6, 12.6), (6, 17), (8.4, 17)])
+        d.polygon([(X(8.0), Y(14.6)), (X(11.0), Y(17)), (X(8.0), Y(19.4))], fill=col)
 
     elif name == "cliff":                                 # install simulation
         # The shape of the test itself: fast while the cache absorbs the write,
@@ -819,8 +863,13 @@ KEYNAME = {
     25: "p", 30: "a", 31: "s", 32: "d", 33: "f", 34: "g", 35: "h", 36: "j", 37: "k",
     38: "l", 44: "z", 45: "x", 46: "c", 47: "v", 48: "b", 49: "n", 50: "m",
     104: "pgup", 109: "pgdn", 102: "home", 107: "end",
+    # the partition editor's size keys; the Results page's zoom (and keypad)
+    26: "[", 27: "]", 12: "-", 13: "=", 74: "-", 78: "+",
 }
-SHIFTED = {2: "!", 3: "@", 4: "#", 5: "$", 6: "%", 7: "^", 8: "&", 9: "*", 10: "(", 11: ")"}
+HOVER_SETTLE = 0.06    # s the pointer rests before a hover moves the highlight
+# Shift+= typed "=" into a Wi-Fi password that needed "+"
+SHIFTED = {2: "!", 3: "@", 4: "#", 5: "$", 6: "%", 7: "^", 8: "&", 9: "*", 10: "(", 11: ")",
+           12: "_", 13: "+"}
 
 class Keyboard:
     """Reads keyboards straight from evdev and grabs them, so nothing leaks to
@@ -828,7 +877,10 @@ class Keyboard:
     # Mouse, touchpad and touchscreen turn into these names, alongside keys.
     # click: at click_xy. back: right button or two-finger tap - same as Esc.
     # hover: the pointer moved (rate-limited). wheelup / wheeldown: scrolling.
-    POINTER_EVENTS = ("click", "back", "hover", "wheelup", "wheeldown")
+    # press / drag / release: only while drag_mode is on (the partition
+    # editor) - anywhere else a release arriving on the next screen would
+    # answer it, so the plain click stays the default.
+    POINTER_EVENTS = ("click", "back", "hover", "wheelup", "wheeldown", "press", "drag", "release")
 
     def __init__(self, grab=True):
         self.script = os.environ.get("DIAG_UI_KEYS")
@@ -841,7 +893,14 @@ class Keyboard:
         self.ptr_scan = 0.0
         self.click_xy = (0, 0)
         self._last_hover = 0.0
+        # A hover waits until the pointer stops (HOVER_SETTLE): every hover
+        # that changed the highlight redrew the whole screen (150 ms for the
+        # home sheet), and the pointer froze for each one - it moved like
+        # 10 Hz (Ash, 1.22). The arrow itself still moves on every event.
+        self._hover_due = 0.0
         self._last_tick = 0.0
+        self.drag_mode = False    # press/drag/release instead of click
+        self.held = False         # the button (or finger) is down
         if self.script:
             self.sfd = os.open(self.script, os.O_RDONLY | os.O_NONBLOCK)
             self.sbuf = b""
@@ -897,6 +956,9 @@ class Keyboard:
         end = time.time() + timeout
         while True:
             now = time.time()
+            if self._hover_due and now >= self._hover_due:
+                self._hover_due = 0.0             # the pointer has come to rest
+                return "hover", 0
             left = end - now
             if left <= 0:
                 return None, None
@@ -911,17 +973,24 @@ class Keyboard:
                 continue
             # Wake at least once a second so the clock and Wi-Fi icon in the
             # header keep up while a menu sits waiting.
-            r, _, _ = select.select(fds, [], [], min(left, 1.0))
+            wait = min(left, 1.0)
+            if self._hover_due:
+                wait = max(0.0, min(wait, self._hover_due - now))
+            r, _, _ = select.select(fds, [], [], wait)
             if time.time() - self._last_tick >= 1.0:
                 self._do_tick()
             for fd in r:
                 if fd in self.ptr:
                     ev = self._read_pointer(fd)
                     if ev == "hover":
+                        self._hover_due = time.time() + HOVER_SETTLE
+                        continue
+                    if ev == "drag":
                         if time.time() - self._last_hover < 0.04:
                             continue
                         self._last_hover = time.time()
                     if ev:
+                        self._hover_due = 0.0
                         return ev, 0
                     continue
                 try: data = os.read(fd, EVENT_SIZE * 64)
@@ -951,11 +1020,11 @@ class Keyboard:
                     if self.shift and code in SHIFTED:
                         name = SHIFTED[code]
                     return name, code
-                if pev == "hover" and time.time() - self._last_hover < 0.04:
+                if pev == "hover":
+                    self._hover_due = time.time() + HOVER_SETTLE
                     pev = None
                 if pev:
-                    if pev == "hover":
-                        self._last_hover = time.time()
+                    self._hover_due = 0.0
                     return pev, 0
 
     def drain(self):
@@ -969,6 +1038,17 @@ class Keyboard:
                 pass
         for st in list(self.ptr.values()) + list(self.shared.values()):
             st.update(touch=False, last=None, btn=[], dx=0, dy=0, wheel=0)
+        self._hover_due = 0.0
+
+    def pump_pointer(self, fds):
+        """Move the arrow for whatever the pointing devices in `fds` sent -
+        between screens, when nothing is asking for input. The main loop used
+        to read only the script's commands there, so the arrow sat still and
+        then jumped. Clicks with no screen to land on are dropped."""
+        for fd in fds:
+            if fd in self.ptr:
+                self._read_pointer(fd)
+        self._hover_due = 0.0
 
     # ---- pointing devices ------------------------------------------
     # Read alongside the keyboards but never grabbed: the touchpad and mouse
@@ -1067,6 +1147,8 @@ class Keyboard:
                 if value:
                     st.update(touch=True, t0=now, moved=0.0, last=None, fingers=1,
                               clicked=False, scroll=0.0)
+                    if kind == "touchscreen" and self.drag_mode:
+                        ev, self.held = "press", True
                 else:
                     # A tap: short, barely moving, no physical click during it.
                     tap = (st["touch"] and now - st["t0"] < 0.25
@@ -1074,13 +1156,18 @@ class Keyboard:
                     st["touch"] = False
                     st["last"] = None
                     if kind == "touchscreen":
-                        ev = "click"
+                        ev = "release" if (self.drag_mode and self.held) else "click"
+                        self.held = False
                     elif tap:
                         ev = "back" if st["fingers"] >= 2 else "click"
             elif code == BTN_LEFT and value == 1:
                 # Clickpads report a two-finger press as a left button.
                 ev = "back" if (kind == "touchpad" and st["fingers"] >= 2) else "click"
                 st["clicked"] = True
+                if ev == "click" and self.drag_mode:
+                    ev, self.held = "press", True
+            elif code == BTN_LEFT and value == 0 and self.held:
+                ev, self.held = "release", False
             elif code == BTN_RIGHT and value == 1:
                 ev = "back"
         moved = False
@@ -1126,6 +1213,9 @@ class Keyboard:
         if ev:
             self.click_xy = (c.x, c.y)
             return ev
+        if moved and self.drag_mode and self.held:
+            self.click_xy = (c.x, c.y)
+            return "drag"
         return "hover" if moved else None
 
     def close(self):
@@ -1250,6 +1340,14 @@ class Screen:
         need the geometry do not have to be drawing something."""
         return self.M, self.hdr, self.W - self.M, self.H - self.ftr
 
+    def para_lines(self, text):
+        """tui_para's text as lines that fit a card row: translated first,
+        then broken with i18n's tokens (Chinese / Japanese have no spaces).
+        The skins keep the same card box, so this width holds for them too."""
+        x0, _, x1, _ = self._card_box()
+        return _pe_wrap(ImageDraw.Draw(Image.new("RGB", (1, 1))), text, self.f_body,
+                        x1 - x0 - 2 * self.pad)
+
     def _card(self, d):
         if SKIN:
             return skins.card(self, sys.modules[__name__], d)
@@ -1351,7 +1449,9 @@ class Screen:
         self.fb.blit(img)
 
     def _clip(self, d, text, font, width):
-        """Nothing may be drawn past the edge of the card."""
+        """Nothing may be drawn past the edge of the card. Cut the translated
+        text: an English string cut short no longer matches its translation."""
+        text = tr(text)
         if width <= 0 or d.textlength(text, font=font) <= width:
             return text
         lo, hi = 0, len(text)
@@ -1456,12 +1556,84 @@ class Screen:
             x = left
             for i, c in enumerate(cols[:5]):
                 w = span * widths[i]
-                d.text((x if i == 0 else x + w, y), c.upper(), font=self.f_small,
+                d.text((x if i == 0 else x + w, y), tr(c).upper(), font=self.f_small,
                        fill=MUTED, anchor="la" if i == 0 else "ra")
                 x += w
             d.line([left, y + int(26 * self.s), right, y + int(26 * self.s)], fill=LINE, width=1)
+        elif kind == "diskmap":
+            self._draw_diskmap(d, it, left, right)
         elif kind == "menu":
             self._draw_menu(d, it[1], it[2], left, right)
+
+    # A drive drawn the way Macrium draws one: a bar of partitions, each
+    # sized by what it holds (a small one still gets room for its name), the
+    # used part of each shaded darker, free space as a gap. Colours come from
+    # the theme, so the bar follows light / dark / contrast.
+    DISK_KIND = {"sys": "ACCENT", "efi": "PASS_", "rec": "WARN_", "msr": "MUTED",
+                 "raw": "MUTED", "data": "INK", "locked": "FAIL_"}
+
+    @staticmethod
+    def _diskmap_segs(spec):
+        segs = []
+        for part in spec.split(";"):
+            bits = part.split("|")
+            if len(bits) < 4:
+                continue
+            try:
+                segs.append((max(1, int(bits[0])), bits[1], bits[2], float(bits[3])))
+            except ValueError:
+                continue
+        return segs
+
+    @staticmethod
+    def _diskmap_widths(segs, avail, minw):
+        n = len(segs)
+        if minw * n >= avail:
+            return [avail / n] * n
+        total = sum(x[0] for x in segs)
+        w = [avail * x[0] / total for x in segs]
+        for _ in range(3):                    # lift the small ones, share out the rest
+            small = {i for i in range(n) if w[i] < minw}
+            big = sum(segs[i][0] for i in range(n) if i not in small)
+            if not small or not big:
+                break
+            rest = avail - minw * len(small)
+            w = [minw if i in small else rest * segs[i][0] / big for i in range(n)]
+        return w
+
+    def _draw_diskmap(self, d, it, left, right):
+        _, row, caption, spec = it
+        s, g = self.s, globals()
+        y = self.row_y(row)
+        if caption:
+            d.text((left, y), self._clip(d, caption, self.f_small, right - left),
+                   font=self.f_small, fill=MUTED, anchor="la")
+        segs = self._diskmap_segs(spec)
+        if not segs:
+            return
+        top, h, gap = y + int(28 * s), int(44 * s), max(2, int(4 * s))
+        widths = self._diskmap_widths(segs, right - left - gap * (len(segs) - 1), int(84 * s))
+        x = float(left)
+        for (size, kind, label, used), w in zip(segs, widths):
+            x0, x1 = int(x), int(x + w)
+            if kind == "free":
+                d.rounded_rectangle([x0, top, x1, top + h], int(8 * s), fill=GROUND, outline=LINE)
+            else:
+                col = g[self.DISK_KIND.get(kind, "INK")]
+                mix = lambda t: tuple(int(col[i] * (1 - t) + PAPER[i] * t) for i in range(3))
+                d.rounded_rectangle([x0, top, x1, top + h], int(8 * s), fill=mix(0.84), outline=mix(0.35))
+                if 0 < used <= 1 and x1 - x0 > int(8 * s):
+                    uw = max(int(6 * s), int((x1 - x0 - 4) * used))
+                    d.rounded_rectangle([x0 + 2, top + h - int(10 * s), x0 + 2 + uw, top + h - 3],
+                                        int(3 * s), fill=mix(0.45))
+            room = x1 - x0 - int(14 * s)
+            if d.textlength(label, font=self.f_tiny) > room and label.count(" ") >= 2:
+                label = label.rsplit(" ", 2)[0]       # "Recovery 1.0 GB" -> "Recovery"
+            text = self._clip(d, label, self.f_tiny, room)
+            if text and text != "...":
+                d.text((x0 + int(8 * s), top + int(16 * s)), text, font=self.f_tiny,
+                       fill=MUTED if kind == "free" else INK, anchor="lm")
+            x += w + gap
 
     def _draw_menu(self, d, sel, entries, left, right):
         """A list of choices. Each entry is (name, desc), and desc may carry
@@ -1600,6 +1772,9 @@ class Screen:
         return inner
 
     def _spaced(self, d, xy, text, font, fill, sp):
+        # drawn a letter at a time: translated whole first, as one letter
+        # alone matches nothing (the manual sheet's title stayed English)
+        text = tr(text)
         x, y = xy
         for ch in text:
             d.text((x, y), ch, font=font, fill=fill, anchor="lm")
@@ -1673,7 +1848,9 @@ class Screen:
     def _sheet_title(self, d, c, inner, top, right_note=""):
         s = self.s
         if self.title:
-            self._spaced(d, (inner + int(22 * s), top + int(34 * s)), self.title.upper(),
+            # translated before the capitals: "PARTITIONS - /DEV/..." matches
+            # no catalogue pattern (1.21)
+            self._spaced(d, (inner + int(22 * s), top + int(34 * s)), tr(self.title).upper(),
                          self.f_ttl, c["ink"], max(1, int(1.5 * s)))
 
     def _balloon(self, d, c, cx, cy, n, on):
@@ -1686,11 +1863,14 @@ class Screen:
 
     def _wrap2(self, d, text, font, avail):
         """One line, or two at the best word break - a name is never cut short
-        while it can wrap (the first tiles truncated "Machine details")."""
-        if d.textlength(text, font=font) <= avail or " " not in text:
+        while it can wrap (the first tiles truncated "Machine details").
+        Chinese and Japanese break between any two characters."""
+        text = tr(text)
+        ws = I18N.tokens(text) if I18N is not None else text.split()
+        if d.textlength(text, font=font) <= avail or len(ws) < 2:
             return [text]
-        ws = text.split()
-        return min(([" ".join(ws[:k]), " ".join(ws[k:])] for k in range(1, len(ws))),
+        jn = I18N.join if I18N is not None else " ".join
+        return min(([jn(ws[:k]), jn(ws[k:])] for k in range(1, len(ws))),
                    key=lambda p: max(d.textlength(t, font=font) for t in p))
 
     def _sheet_layout(self, labels):
@@ -1826,7 +2006,7 @@ class Screen:
             d.line([(x0, y), (x1, y)], fill=c["hair"])
         if self.hint:
             avail = x1 - x0 - int(36 * s)
-            lines = self._wrap2(d, " ".join(self.hint.upper().split()), self.f_note, avail)
+            lines = self._wrap2(d, " ".join(tr(self.hint).upper().split()), self.f_note, avail)
             lh = int(self.f_note.size * 1.3)
             for k, ln in enumerate(lines):
                 d.text((x0 + int(18 * s), y1 - int(22 * s) - (len(lines) - 1 - k) * lh),
@@ -1848,7 +2028,7 @@ class Screen:
                 self._sheet_table(d, c, it[1], it[2], inner + int(22 * s), top + int(66 * s),
                                   self.W - inner - int(22 * s), self.H - inner - int(48 * s))
         if self.hint:
-            d.text((inner + int(22 * s), self.H - inner - int(24 * s)), self.hint.upper(),
+            d.text((inner + int(22 * s), self.H - inner - int(24 * s)), tr(self.hint).upper(),
                    font=self.f_note, fill=c["ink2"], anchor="lm")
         self.fb.blit(img)
 
@@ -1981,11 +2161,11 @@ class Screen:
         c = kb.cursor
         return kb.click_xy if name == "click" else ((c.x, c.y) if c else (-1, -1))
 
-    def menu(self, kb, title, hint, entries):
+    def menu(self, kb, title, hint, entries, sel=0):
         """Returns the 1-based choice, 0 for back, or "wifi" when the header
         Wi-Fi icon was clicked (or W pressed) - tui.sh opens the Wi-Fi page and
-        then asks this menu again."""
-        sel = 0
+        then asks this menu again. `sel`: the row it opens on (0-based)."""
+        sel = max(0, min(len(entries) - 1, sel))
         n = len(entries)
         self.title, self.hint = title, hint
         self._menu_first = 0
@@ -2138,66 +2318,92 @@ class Screen:
                 upper = kb.shift ^ kb.caps      # Caps Lock and Shift cancel out
                 buf += (name.upper() if upper and name.isalpha() else name)
 
-    def _wait_dismiss(self, kb):
+    def _wait_dismiss(self, kb, extra=""):
+        """Until a dismiss key - or one of the letters in `extra` (tui_keys,
+        a second page). Returns the key's name."""
         kb.drain()
         while True:
             name, _ = kb.poll(3600)
             if name in ("enter", "esc", "q", "space", "click", "back"):
-                return
+                return name
+            if name and len(name) == 1 and name in extra:
+                return name
+
+    # The Results page's text, times the body text: it opened at twice the
+    # body size, on top of the Text size setting - at Huge that was 4x, and
+    # Ash found it far too big (1.22). It opens at body size now; - and +
+    # step through these, and the choice holds until the renderer restarts.
+    PAGER_ZOOM = (0.8, 1.0, 1.25, 1.6, 2.0)
+    pager_zoom = 1
 
     def pager(self, kb, title, path):
         try:
             with open(path, errors="replace") as f:
-                lines = [l.rstrip("\n") for l in f]
+                raw = [l.rstrip("\n") for l in f]
         except OSError:
-            lines = ["(nothing to show)"]
-        # How many of these tall lines fit inside the card, and how wide a line
-        # can be before it runs off the edge.
+            raw = ["(nothing to show)"]
+        # Leave room for the screen title the card draws above the text - as
+        # tall as the title is at this text size (at Huge the report's first
+        # lines ran into it).
         x0, y0, x1, y1 = self._card_box()
-        # Leave room for the screen title the card draws above the text.
-        ytop = y0 + self.pad + int(52 * self.s)
+        ytop = y0 + self.pad + max(int(52 * self.s), int(self.f_h.size * 1.7))
         avail_h = y1 - ytop - self.pad
-        per = max(3, int(avail_h // self.readh))
-        cw = max(1.0, self.f_read.getlength("0"))
-        cols = max(20, int(((x1 - x0) - self.pad * 2) / cw))
-        # At double size a report line no longer fits across the card, so fold
-        # rather than clip - truncating silently ate drive model numbers and the
-        # right-hand column of every table.
-        wrapped = []
-        for l in lines:
-            if len(l) <= cols:
-                wrapped.append(l)
-                continue
-            first = True
-            while l:
-                take = cols if first else cols - 2
-                wrapped.append(l[:take] if first else "  " + l[:take])
-                l = l[take:]
-                first = False
-        lines = wrapped or ["(nothing to show)"]
-
-        top = 0
         self.title = title
         kb.drain()
+        frac = 0.0                         # where we were, kept across a zoom
         while True:
-            self.hint = "arrows to scroll   Q to go back   line %d of %d" % (top + 1, len(lines))
-            self.items = []
-            for i, l in enumerate(lines[top:top + per]):
-                tone = ""
-                if l.startswith("RESULT:"):
-                    tone = "ok" if " PASS" in l else ("err" if " FAIL" in l else "warn")
-                self.items.append(("read", ytop + i * self.readh, l, tone))
-            self.render()
-            name, _ = kb.poll(3600)
-            while name is None or name in ("hover", "click"):
+            z = self.PAGER_ZOOM[Screen.pager_zoom]
+            self.f_read = font(MONO_R, max(8, int(22 * self.s * TEXT_SCALE * z)))
+            self.readh = max(10, int(self.f_read.size * 1.3))
+            # How many lines fit inside the card, and how wide a line can be
+            # before it runs off the edge.
+            per = max(3, int(avail_h // self.readh))
+            cw = max(1.0, self.f_read.getlength("0"))
+            cols = max(20, int(((x1 - x0) - self.pad * 2) / cw))
+            # A report line too wide for the card is folded rather than
+            # clipped - truncating silently ate drive model numbers and the
+            # right-hand column of every table.
+            lines = []
+            for l in raw:
+                if len(l) <= cols:
+                    lines.append(l)
+                    continue
+                first = True
+                while l:
+                    take = cols if first else cols - 2
+                    lines.append(l[:take] if first else "  " + l[:take])
+                    l = l[take:]
+                    first = False
+            lines = lines or ["(nothing to show)"]
+            last = max(0, len(lines) - per)
+            top = min(last, int(round(frac * len(lines))))
+            while True:
+                self.hint = "arrows to scroll   - / + text size   Q to go back   line %d of %d" % (
+                    top + 1, len(lines))
+                self.items = []
+                for i, l in enumerate(lines[top:top + per]):
+                    tone = ""
+                    if l.startswith("RESULT:"):
+                        tone = "ok" if " PASS" in l else ("err" if " FAIL" in l else "warn")
+                    self.items.append(("read", ytop + i * self.readh, l, tone))
+                self.render()
                 name, _ = kb.poll(3600)
-            if name == "down": top = min(max(0, len(lines) - per), top + 1)
-            elif name == "up": top = max(0, top - 1)
-            elif name == "wheeldown": top = min(max(0, len(lines) - per), top + 3)
-            elif name == "wheelup": top = max(0, top - 3)
-            elif name == "pgdn": top = min(max(0, len(lines) - per), top + per)
-            elif name == "pgup": top = max(0, top - per)
-            elif name in ("q", "esc", "enter", "back"): return
+                while name is None or name in ("hover", "click"):
+                    name, _ = kb.poll(3600)
+                if name == "down": top = min(last, top + 1)
+                elif name == "up": top = max(0, top - 1)
+                elif name == "wheeldown": top = min(last, top + 3)
+                elif name == "wheelup": top = max(0, top - 3)
+                elif name == "pgdn": top = min(last, top + per)
+                elif name == "pgup": top = max(0, top - per)
+                elif name in ("q", "esc", "enter", "back"): return
+                elif name in ("-", "=", "+"):
+                    step = -1 if name == "-" else 1
+                    zi = max(0, min(len(self.PAGER_ZOOM) - 1, Screen.pager_zoom + step))
+                    if zi != Screen.pager_zoom:
+                        Screen.pager_zoom = zi
+                        frac = top / max(1, len(lines))
+                        break              # fold the lines again at the new size
 
 
 # ---------------------------------------------------------------- keyboard test
@@ -3314,6 +3520,425 @@ def pixel_test(scr, kb):
     return "%d|%d" % (len(seen), len(PIX_SCREENS))
 
 
+# ---------------------------------------------------------------- partition editor
+def _pe_mix(col, t):
+    return tuple(int(col[i] * (1 - t) + PAPER[i] * t) for i in range(3))
+
+
+def _pe_hatch(img, box, col, step):
+    x0, y0, x1, y1 = [int(v) for v in box]
+    if x1 - x0 < 2 or y1 - y0 < 2:
+        return
+    tile = Image.new("RGB", (x1 - x0, y1 - y0), GROUND)
+    td = ImageDraw.Draw(tile)
+    for k in range(-(y1 - y0), x1 - x0, step):
+        td.line([(k, y1 - y0), (k + (y1 - y0), 0)], fill=col, width=2)
+    mask = Image.new("L", tile.size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, tile.size[0] - 1, tile.size[1] - 1], 8, fill=255)
+    img.paste(tile, (x0, y0), mask)
+
+
+def _pe_bar(scr, img, d, left, right, top, h, segs):
+    """One drive as a bar, the way the clone plan draws it - plus hatching for
+    free space and for partitions that will be made new. Returns the boxes."""
+    s, g = scr.s, globals()
+    gap = max(2, int(4 * s))
+    widths = scr._diskmap_widths(segs, right - left - gap * (len(segs) - 1), int(84 * s)) if segs else []
+    boxes, x = [], float(left)
+    for (size, kind, label, used), w in zip(segs, widths):
+        box = [int(x), top, int(x + w), top + h]
+        if kind in ("free", "new"):
+            col = ACCENT if kind == "new" else LINE
+            _pe_hatch(img, box, _pe_mix(col, 0.7) if kind == "new" else LINE, int(10 * s))
+            d.rounded_rectangle(box, int(8 * s), outline=col, width=max(1, int(2 * s)) if kind == "new" else 1)
+        else:
+            col = g[Screen.DISK_KIND.get(kind, "INK")]
+            d.rounded_rectangle(box, int(8 * s), fill=_pe_mix(col, 0.84), outline=_pe_mix(col, 0.35))
+            if 0 < used <= 1:
+                uw = max(int(6 * s), int((box[2] - box[0] - 6) * used))
+                d.rounded_rectangle([box[0] + 3, top + h - int(11 * s), box[0] + 3 + uw, top + h - 4],
+                                    int(3 * s), fill=_pe_mix(col, 0.45))
+        room = box[2] - box[0] - int(16 * s)
+        if d.textlength(label, font=scr.f_small) > room and label.count(" ") >= 2:
+            label = label.rsplit(" ", 2)[0]
+        text = scr._clip(d, label, scr.f_small, room)
+        if text and text != "...":
+            d.text((box[0] + int(10 * s), top + int(18 * s)), text, font=scr.f_small,
+                   fill=MUTED if kind == "free" else INK, anchor="lm")
+        boxes.append(box)
+        x += w + gap
+    return boxes
+
+
+def _pe_wrap(d, text, font, width):
+    # translated first, broken with i18n's tokens: a line cut from the English
+    # matches nothing in the catalogue, and Chinese / Japanese have no spaces
+    text = tr(text)
+    ws = I18N.tokens(text) if I18N is not None else text.split()
+    jn = I18N.join if I18N is not None else " ".join
+    lines, cur = [], []
+    for word in ws:
+        if cur and d.textlength(jn(cur + [word]), font=font) > width:
+            lines.append(jn(cur))
+            cur = [word]
+        else:
+            cur = cur + [word]
+    return lines + ([jn(cur)] if cur else [])
+
+
+class PartEditor:
+    """The partition editor (partitions.sh): the drive as it is now, and as
+    it will be - Ash's pick of three samples. The After bar is the one
+    dragged: an edge resizes, the middle moves. Every change goes straight
+    into the state file through imgparted.py, which knows how far each
+    partition may go; nothing here writes a disk. Whatever needs a question
+    (a new partition's filesystem, an exact size) or writes the drive
+    (Apply) goes back to the script as "action|index"."""
+    BUTTONS = (("size", "Exact size"), ("new", "New"), ("delete", "Delete"),
+               ("format", "Format"), ("undo", "Undo"), ("apply", "Apply"))
+    HINT = ("Left/Right choose   [ ] size   Shift+Left/Right move   N new   D delete   "
+            "U undo   A apply   Q back")
+
+    def __init__(self, scr, path):
+        import imgparted, imgplan, imgengine
+        self.P, self.E, self.gb = imgparted, imgengine, imgplan.gb
+        self.scr, self.path = scr, path
+        self.st = imgparted.load(path)
+        self.sec = self.st["disk"]["sector"]
+        self.sel = 0
+        self.drag = None          # (what, index, state at press, x at press, moved)
+        self.boxes, self.buttons, self.bar = [], [], (0, 1, 0, 0)
+        self.note = ""
+
+    # ---- model -----------------------------------------------------
+    def items(self):
+        """The After bar left to right: ("part", i) and ("gap", g)."""
+        seq = [(e["start"], "part", i) for i, e in enumerate(self.st["after"])]
+        seq += [(s0, "gap", g) for g, (s0, _z) in enumerate(self.P.gaps(self.st))]
+        return [(k, i) for _, k, i in sorted(seq)]
+
+    def cur(self):
+        it = self.items()
+        if not it:
+            return None
+        self.sel = max(0, min(self.sel, len(it) - 1))
+        return it[self.sel]
+
+    def select_part(self, num):
+        for k, (kind, i) in enumerate(self.items()):
+            if kind == "part" and self.st["after"][i]["num"] == num:
+                self.sel = k
+                return
+
+    def save(self):
+        self.P.save(self.st, self.path)
+
+    def enabled(self, act):
+        cur = self.cur()
+        part = cur is not None and cur[0] == "part"
+        if act == "size":
+            return part and self.P.limits(self.st, cur[1])["can_resize"]
+        if act == "new":
+            return cur is not None and cur[0] == "gap"
+        if act in ("delete", "format"):
+            return part
+        if act == "undo":
+            return bool(self.st.get("history"))
+        return bool(self.P.ops(self.st))          # apply
+
+    # ---- drawing ---------------------------------------------------
+    def segs_now(self):
+        doc = {"parts": self.st["now"], "bytes": self.st["disk"]["bytes"],
+               "sector": self.sec, "label": self.st["disk"]["label"]}
+        return self.scr._diskmap_segs(self.E.mapspec(doc))
+
+    def segs_after(self):
+        system, gaps, out = self.P._system(self.st), self.P.gaps(self.st), []
+        for kind, i in self.items():
+            if kind == "gap":
+                z = gaps[i][1] * self.sec
+                out.append((z, "free", "free %s" % self.gb(z), -1))
+                continue
+            e = self.st["after"][i]
+            z = e["size"] * self.sec
+            if e.get("new") or e.get("format"):
+                out.append((z, "new", "%s %s" % (self.P.name_of(self.st, e), self.gb(z)), -1))
+                continue
+            p = self.P._now(self.st, e["num"])
+            k = self.E.seg_kind(p, system)
+            used = p.get("used")
+            out.append((z, k, self.E.seg_label(p, k, z), min(1.0, used / float(z)) if used else -1))
+        return out
+
+    def draw(self):
+        scr, s = self.scr, self.scr.s
+        img = Image.new("RGB", (scr.W, scr.H), GROUND)
+        d = ImageDraw.Draw(img)
+        scr._draw_header(img, d)
+        x0, y0, x1, y1 = scr._card(d)
+        L, R = x0 + scr.pad, x1 - scr.pad
+        disk = self.st["disk"]
+        title = "Partitions  -  /dev/%s  %s  %s" % (disk["name"], self.gb(disk["bytes"]), disk.get("model") or "")
+        # row_y leaves room for a title only when the screen has one set
+        scr.title, scr.hint = title.strip(), self.HINT
+        d.text((L, y0 + scr.pad), scr._clip(d, title.strip(), scr.f_h, R - L), font=scr.f_h, fill=INK, anchor="la")
+        y = scr.row_y(6)
+        d.text((L, y), "Now", font=scr.f_small, fill=MUTED, anchor="la")
+        _pe_bar(scr, img, d, L, R, int(y + 26 * s), int(46 * s), self.segs_now())
+        y2 = y + int(116 * s)
+        d.text((L, y2), "After  -  drag an edge to resize, the middle to move", font=scr.f_small,
+               fill=MUTED, anchor="la")
+        top, h = int(y2 + 52 * s), int(60 * s)
+        boxes = _pe_bar(scr, img, d, L, R, top, h, self.segs_after())
+        self.boxes, self.bar = list(zip(self.items(), boxes)), (L, R, top, h)
+        cur = self.cur()
+        if cur is not None and self.sel < len(boxes):
+            self.draw_sel(d, cur, boxes[self.sel], top, h)
+        y3 = self.draw_info(d, L, R, top + h + int(28 * s))
+        self.draw_changes(d, L, R, y3)
+        self.draw_buttons(d, L, R, scr.H - scr.ftr - int(70 * s))
+        d.text((scr.M + int(4 * s), scr.H - scr.ftr // 2), self.HINT, font=scr.f_small,
+               fill=MUTED, anchor="lm")
+        scr.fb.blit(img)
+
+    def draw_sel(self, d, cur, box, top, h):
+        s = self.scr.s
+        d.rounded_rectangle([box[0] - 3 * s, box[1] - 3 * s, box[2] + 3 * s, box[3] + 3 * s],
+                            int(10 * s), outline=ACCENT, width=max(2, int(3 * s)))
+        if cur[0] != "part":
+            return
+        lim = self.P.limits(self.st, cur[1])
+        grips = [box[2] + 1] if lim["can_resize"] else []
+        if lim["can_resize"] and lim["can_move"]:
+            grips.append(box[0] - 1)
+        for gx in grips:
+            d.rounded_rectangle([gx - 7 * s, top + h * 0.2, gx + 7 * s, top + h * 0.8], int(5 * s), fill=ACCENT)
+            for k in (-2.5, 0, 2.5):
+                d.line([gx + k * s, top + h * 0.35, gx + k * s, top + h * 0.65], fill=PAPER,
+                       width=max(1, int(s)))
+        if self.drag and self.drag[4]:
+            e = self.st["after"][cur[1]]
+            flag = self.gb(e["size"] * self.sec)
+            if self.drag[0] != "move" and lim["can_resize"]:
+                flag += "  (smallest %s)" % self.gb(lim["min_size"] * self.sec)
+            fw = d.textlength(flag, font=self.scr.f_small) + 24 * s
+            gx = (box[0] + box[2]) / 2 if self.drag[0] == "move" else (box[2] if self.drag[0] == "right" else box[0])
+            fy = top - 40 * s
+            d.rounded_rectangle([gx - fw / 2, fy, gx + fw / 2, fy + 30 * s], int(15 * s), fill=INK)
+            d.text((gx, fy + 15 * s), flag, font=self.scr.f_small, fill=PAPER, anchor="mm")
+
+    def draw_info(self, d, L, R, y):
+        scr, s = self.scr, self.scr.s
+        cur = self.cur()
+        if cur is None:
+            head, sub = "This drive has no partitions", "New makes one in the free space."
+        elif cur[0] == "gap":
+            z = self.P.gaps(self.st)[cur[1]][1] * self.sec
+            head, sub = "Unallocated  %s" % self.gb(z), "New (N) makes a partition here."
+        else:
+            e, lim = self.st["after"][cur[1]], self.P.limits(self.st, cur[1])
+            fs = self.P.FS_NAMES.get(e.get("fs"), e.get("fs") or "no filesystem")
+            head = "%s  (%s)  %s" % (self.P.name_of(self.st, e), fs, self.gb(e["size"] * self.sec))
+            sub = lim["why"] or "Can be %s to %s." % (
+                self.gb(lim["min_size"] * self.sec), self.gb((lim["hi"] - e["start"]) * self.sec))
+        d.text((L, y), head, font=scr.f_bodyb, fill=INK, anchor="la")
+        y += int(32 * s)
+        for line in _pe_wrap(d, self.note or sub, scr.f_small, R - L)[:2]:
+            d.text((L, y), line, font=scr.f_small, fill=WARN_ if self.note else MUTED, anchor="la")
+            y += int(24 * s)
+        return y + int(12 * s)
+
+    def draw_changes(self, d, L, R, y):
+        scr, s = self.scr, self.scr.s
+        steps = self.P.ops(self.st)
+        cap = ("Changes, in the order they will run - nothing is written until Apply" if steps
+               else "No changes yet - drag an edge, or choose a partition and use the buttons")
+        d.text((L, y), cap, font=scr.f_small, fill=MUTED, anchor="la")
+        for k, o in enumerate(steps[:4]):
+            # the step translated before its number: "1.  Shrink C: ..." as a
+            # whole matches no catalogue entry
+            d.text((L, y + int((28 + 30 * k) * s)), scr._clip(d, "%d.  %s" % (k + 1, tr(o["text"])), scr.f_body, R - L),
+                   font=scr.f_body, fill=INK, anchor="la")
+        if len(steps) > 4:
+            d.text((L, y + int((28 + 120) * s)), "... and %d more" % (len(steps) - 4), font=scr.f_small,
+                   fill=MUTED, anchor="la")
+
+    def draw_buttons(self, d, L, R, y):
+        s = self.scr.s
+        h, x = int(42 * s), L
+        self.buttons = []
+        n = len(self.P.ops(self.st))
+        for act, label in self.BUTTONS:
+            if act == "apply":
+                # two whole strings, not change%s: an empty value matches no
+                # catalogue pattern, and other languages do plurals differently
+                label = ("Apply 1 change" if n == 1 else "Apply %d changes" % n) if n else "Apply"
+            on = self.enabled(act)
+            w = d.textlength(label, font=self.scr.f_bodyb) + 40 * s
+            if act == "apply":
+                x = R - w                       # the one that writes sits apart, on the right
+            primary = act == "apply" and on
+            d.rounded_rectangle([x, y, x + w, y + h], h // 2, fill=ACCENT if primary else GROUND,
+                                outline=ACCENT if primary else LINE)
+            d.text((x + w / 2, y + h / 2), label, font=self.scr.f_bodyb,
+                   fill=PAPER if primary else (INK if on else _pe_mix(MUTED, 0.4)), anchor="mm")
+            self.buttons.append((act, [x, y, x + w, y + h], on))
+            x += w + 12 * s
+
+    # ---- input -----------------------------------------------------
+    def run(self, kb):
+        self.draw()
+        kb.drain()
+        while True:
+            name, _ = kb.poll(3600)
+            if name is None or name == "hover":
+                continue
+            res, redraw = self.handle(kb, name)
+            if res:
+                self.save()
+                return res
+            if redraw:
+                self.draw()
+
+    def handle(self, kb, name):
+        if name in ("q", "esc", "back"):
+            return "back", False
+        if name == "press":
+            return self.press(kb.click_xy)
+        if name == "drag":
+            return None, self.drag_to(kb.click_xy[0])
+        if name == "release":
+            return self.release(kb.click_xy[0])
+        if name == "click":                      # a tap: press and let go in one
+            res = self.press(kb.click_xy)
+            self.drag = None
+            return res
+        self.note = ""
+        if name in ("left", "right"):
+            step = -1 if name == "left" else 1
+            if kb.shift:
+                return None, self.nudge(move=step)
+            self.sel += step
+            return None, True
+        if name in ("[", "-", "]", "="):
+            return None, self.nudge(size=-1 if name in ("[", "-") else 1)
+        if name == "enter":
+            cur = self.cur()
+            if cur is None:
+                return None, False
+            return ("new|%d" % cur[1] if cur[0] == "gap" else "menu|%d" % cur[1]), False
+        keys = {"n": "new", "d": "delete", "f": "format", "s": "size", "u": "undo", "a": "apply"}
+        if name in keys:
+            return self.action(keys[name])
+        return None, False
+
+    def action(self, act):
+        if not self.enabled(act):
+            self.note = {"new": "Choose a stretch of free space first (Left/Right).",
+                         "size": "This partition keeps its size - see the line above.",
+                         "apply": "Nothing to apply yet.", "undo": "Nothing to undo."}.get(
+                             act, "Choose a partition first.")
+            return None, True
+        cur = self.cur()
+        if act == "delete":
+            self.st = self.P.delete(self.st, cur[1])
+            self.save()
+            return None, True
+        if act == "undo":
+            self.st = self.P.undo(self.st)
+            self.save()
+            return None, True
+        if act == "apply":
+            return "apply", False
+        return "%s|%d" % (act, cur[1]), False
+
+    def nudge(self, size=0, move=0):
+        """1 GB at a time from the keyboard."""
+        cur = self.cur()
+        if cur is None or cur[0] != "part":
+            return False
+        e = self.st["after"][cur[1]]
+        step = (1 << 30) // self.sec
+        st = self.P.set_geometry(self.st, cur[1], e["start"] + move * step, e["size"] + size * step)
+        if st is self.st:
+            lim = self.P.limits(self.st, cur[1])
+            self.note = lim["why"] or "It cannot go further that way."
+            return True
+        self.st = st
+        self.save()
+        self.select_part(e["num"])
+        return True
+
+    def press(self, xy):
+        x, y = xy
+        for act, box, on in self.buttons:
+            if box[0] <= x <= box[2] and box[1] <= y <= box[3]:
+                return self.action(act)
+        edge = self.edge_at(x, y)
+        if edge:
+            k, side, i = edge
+            self.sel, self.note = k, ""
+            self.drag = (side, i, self.st, x, False)
+            return None, True
+        for k, ((kind, i), box) in enumerate(self.boxes):
+            if box[0] <= x <= box[2] and box[1] <= y <= box[3]:
+                self.sel, self.note = k, ""
+                if kind == "part" and self.P.limits(self.st, i)["can_move"]:
+                    self.drag = ("move", i, self.st, x, False)
+                return None, True
+        return None, False
+
+    def edge_at(self, x, y):
+        """(box index, "right"/"left", partition) of the resizable edge under
+        the pointer, the nearest one - on any partition. Only the selected
+        one's edges used to grab: the first drag on C:'s edge just selected
+        C: and the drag did nothing (VM, 1.21)."""
+        s = self.scr.s
+        best = None
+        for k, ((kind, i), box) in enumerate(self.boxes):
+            if kind != "part" or not box[1] - 8 * s <= y <= box[3] + 8 * s:
+                continue
+            lim = self.P.limits(self.st, i)
+            if not lim["can_resize"]:
+                continue
+            sides = [("right", box[2])] + ([("left", box[0])] if lim["can_move"] else [])
+            for side, ex in sides:
+                dist = abs(x - ex)
+                if dist <= 12 * s and (best is None or dist < best[0]):
+                    best = (dist, k, side, i)
+        return best[1:] if best else None
+
+    def drag_to(self, x):
+        if not self.drag:
+            return False
+        what, i, base, x0, moved = self.drag
+        if not moved and abs(x - x0) < 6 * self.scr.s:
+            return False
+        self.drag = (what, i, base, x0, True)
+        L, R = self.bar[0], self.bar[1]
+        dsec = int((x - x0) * (self.st["end"] - self.st["first"]) / max(1, R - L))
+        e = base["after"][i]
+        if what == "right":
+            st = self.P.set_geometry(base, i, e["start"], e["size"] + dsec)
+        elif what == "left":
+            st = self.P.set_geometry(base, i, e["start"] + dsec, e["size"] - dsec)
+        else:
+            st = self.P.set_geometry(base, i, e["start"] + dsec, e["size"])
+        self.st = st
+        self.select_part(e["num"])
+        return True
+
+    def release(self, x):
+        if not self.drag:
+            return None, False
+        self.drag_to(x)
+        moved = self.drag[4]
+        self.drag = None
+        if moved:
+            self.save()
+        return None, True
+
+
 def _kb_events(kb, timeout):
     """Raw (code, value) pairs - the keyboard test needs releases too."""
     out = []
@@ -3428,9 +4053,14 @@ def main():
     building = None
     try:
         while True:
-            r, _, _ = select.select([cmd_fd], [], [],
+            # the pointing devices too: between screens nothing else reads
+            # them, and the arrow stood still, then jumped (1.22)
+            pfds = list(kb.ptr) if fb.cursor is not None else []
+            r, _, _ = select.select([cmd_fd] + pfds, [], [],
                                     min(0.12, live_period()) if live["anim"] is not None else 0.12)
-            if r:
+            if pfds and any(fd != cmd_fd for fd in r):
+                kb.pump_pointer([fd for fd in r if fd != cmd_fd])
+            if cmd_fd in r:
                 chunk = os.read(cmd_fd, 65536)
                 if not chunk:                     # writer closed; reopen
                     os.close(cmd_fd); cmd_fd = os.open(CMD, os.O_RDONLY); continue
@@ -3439,7 +4069,7 @@ def main():
                 raw, buf = buf.split(b"\n", 1)
                 parts = raw.decode("utf-8", "replace").split("\t")
                 op = parts[0]
-                if op not in ("kv", "line", "bar", "trow"):
+                if op not in ("kv", "line", "bar", "trow", "diskmap"):
                     # TABs shown as " | ": raw, they came out as boxes in the
                     # Toolkit log and ran the fields together.
                     sys.stderr.write("> %s\n" % " | ".join(parts)[:160])
@@ -3447,12 +4077,12 @@ def main():
                 # A question or a result ends a live animation: the operator
                 # must see the screen that asks, not the drive picture.
                 if live["anim"] is not None and op in (
-                        "anykey", "menu", "gridmenu", "confirm", "input", "msg", "pager",
-                        "kbtest", "ptrtest", "camtest", "tstest", "pixtest", "anim"):
+                        "anykey", "menu", "menuat", "gridmenu", "confirm", "input", "msg", "pager",
+                        "kbtest", "ptrtest", "camtest", "tstest", "pixtest", "anim", "partedit"):
                     live_end(); dirty = True
                 # A blocking command must not sit on the keyboard while the
                 # screen still shows the previous frame.
-                if dirty and live["anim"] is None and op in ("waitkey", "anykey", "menu", "confirm",
+                if dirty and live["anim"] is None and op in ("waitkey", "anykey", "menu", "menuat", "confirm",
                                     "input", "msg", "pager", "kbtest", "gridmenu", "ptrtest", "camtest", "tstest",
                                     "pixtest", "anim"):
                     scr.render(); dirty = False
@@ -3475,6 +4105,19 @@ def main():
                                      if not (i[0] == "line" and i[1] == parts[1])]
                         scr.items.append(("line", parts[1], parts[2],
                                           parts[3] if len(parts) > 3 else "")); dirty = True
+                    elif op == "para":
+                        # tui_para: row, text, tone. Wrapped here, after it is
+                        # translated - bash cut it into 95-character English
+                        # pieces, and no piece matched the catalogue (1.21).
+                        # Answers the next free row.
+                        row = int(parts[1])
+                        for ln in scr.para_lines(parts[2]):
+                            scr.items = [i for i in scr.items
+                                         if not (i[0] == "line" and i[1] == str(row))]
+                            scr.items.append(("line", str(row), ln,
+                                              parts[3] if len(parts) > 3 else ""))
+                            row += 1
+                        reply(row); dirty = True
                     elif op == "bar":
                         scr.items = [i for i in scr.items if i[0] != "bar"]
                         scr.items.append(("bar", parts[1], int(float(parts[2])))); dirty = True
@@ -3487,6 +4130,12 @@ def main():
                         scr.items = [i for i in scr.items
                                      if not (i[0] == "trow" and i[1] == parts[1])]
                         scr.items.append(("trow", parts[1], parts[2:])); dirty = True
+                    elif op == "diskmap":
+                        # row, caption, "bytes|kind|label|used;..." (imgengine mapspec)
+                        scr.items = [i for i in scr.items
+                                     if not (i[0] == "diskmap" and i[1] == parts[1])]
+                        scr.items.append(("diskmap", parts[1], parts[2] if len(parts) > 2 else "",
+                                          parts[3] if len(parts) > 3 else "")); dirty = True
                     elif op == "setting":
                         # key, value. Applied immediately and kept, so the rest
                         # of the session and the next restart both follow it.
@@ -3501,6 +4150,8 @@ def main():
                                 globals()["TEXT_SCALE"] = max(0.75, min(2.5, float(val)))
                             except ValueError:
                                 pass
+                        elif key == "lang" and I18N is not None:
+                            I18N.load(val)
                         scr._build_fonts()
                         dirty = True
                     elif op == "flush":
@@ -3529,6 +4180,15 @@ def main():
                             name, _, desc = e.partition("|")
                             entries.append((name.strip(), desc.strip()))
                         reply(scr.menu(kb, parts[1], parts[2], entries)); dirty = False
+                    elif op == "menuat":
+                        # tui_menu_at: row to open on (1-based), then as menu -
+                        # the boot language prompt opens on the saved language
+                        entries = []
+                        for e in parts[4:]:
+                            name, _, desc = e.partition("|")
+                            entries.append((name.strip(), desc.strip()))
+                        at = int(parts[1]) - 1 if parts[1].isdigit() else 0
+                        reply(scr.menu(kb, parts[2], parts[3], entries, sel=at)); dirty = False
                     elif op == "gridmenu":
                         entries = []
                         for e in parts[3:]:
@@ -3545,7 +4205,8 @@ def main():
                     elif op == "input":
                         reply(scr.text_input(kb, parts[1], parts[2])); dirty = False
                     elif op == "anykey":
-                        scr._wait_dismiss(kb); reply("ok")
+                        # the key that ended it is the reply (tui_keys reads it)
+                        reply(scr._wait_dismiss(kb, parts[1] if len(parts) > 1 else "") or "ok")
                     elif op == "pager":
                         scr.pager(kb, parts[1], parts[2]); reply("ok"); dirty = False
                     elif op == "waitkey":
@@ -3581,6 +4242,19 @@ def main():
                         reply(fullscreen(touchscreen_test, scr, kb)); dirty = True
                     elif op == "pixtest":
                         reply(fullscreen(pixel_test, scr, kb)); dirty = True
+                    elif op == "partedit":
+                        # The partition editor (partitions.sh). Not fullscreen():
+                        # it is dragged with the pointer, so the pointer stays.
+                        # Its own mode keeps the header clock from repainting
+                        # the card underneath it.
+                        scr.mode = "edit"
+                        kb.drag_mode = True
+                        try:
+                            reply(PartEditor(scr, parts[1]).run(kb))
+                        finally:
+                            kb.drag_mode = kb.held = False
+                            scr.mode = "card"
+                        dirty = True
                     elif op == "anim":
                         # The "how it works" animations: the drive tests
                         # (ssdanim) or the rest of the machine's (hwanim).
@@ -3599,9 +4273,9 @@ def main():
                     sys.stderr.write("ui: %s FAILED: %s\n%s\n"
                                      % (op, exc, traceback.format_exc()))
                     sys.stderr.flush()
-                    if op in ("menu", "confirm", "input", "msg", "anykey",
+                    if op in ("menu", "menuat", "confirm", "input", "msg", "anykey",
                               "pager", "waitkey", "kbtest", "gridmenu", "ptrtest", "camtest", "tstest",
-                              "pixtest", "ptrprobe", "anim"):
+                              "pixtest", "ptrprobe", "anim", "partedit"):
                         reply("")
             now = time.time()
             if live["anim"] is not None:

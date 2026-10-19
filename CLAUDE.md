@@ -5,8 +5,8 @@ Bootable USB/ISO for bench-testing laptops at Data Dynamics (Johor). Owner: Ash
 minimal Ubuntu live system straight into a full-screen tile menu of hardware
 tests, and writes a per-machine report to the USB stick.
 
-**Current version: 1.20.0** (`toolkit/lib.sh` → `DIAG_VERSION`).
-Last delivered ISO: 1.20.0, SHA256 `2b386ec50d6082c43250fc09f69cb6001122e5e876752ef5e3440fab584c8f5f`.
+**Current version: 1.23.0** (`toolkit/lib.sh` → `DIAG_VERSION`).
+Last delivered ISO: 1.23.0, SHA256 `6187c4e0bc0e37852919a022ba819ddf6ed5210415585d2258d32247034df773`.
 Version history and the reasoning behind past changes: `docs/HISTORY.md`.
 
 ## Layout
@@ -40,14 +40,48 @@ toolkit/            everything that ends up in /opt/diag on the image
   errlog.sh         Hardware error log: kernel-log fault rules (--quiet in Full run)
   sdtest.sh         SD card reader; lidtest.sh lid + tablet-mode switch
   swstate.py        input switch states (lid, tablet, jacks) via EVIOCGSW
+  imaging.sh        Disk imaging screens (tile 7): clone, back up, restore,
+                    check; runs imgengine.py in the background (status file)
+  imgengine.py      the imaging work: clone / backup / restore / verify,
+                    BitLocker unlock, hibernation discard; the shrink-in-
+                    scratch device (dm snapshot); drive bars (mapspec)
+  imgplan.py        where each partition goes on the new drive (pure; tests
+                    in test/imgplan_test.py, run by the build)
+  imgscan.py        a drive's table + per-partition fs, used, min, state
+  imgfmt.py         Clonezilla's image folder; partclone v2 header/bitmap;
+                    toolkit extras in diag/ (frame index for browsing)
+  partitions.sh     Partitions (Disk imaging item 5): runs ui.py's PartEditor
+                    (op partedit - Now / After bars, drag), then Apply
+  imgparted.py      the editor's model + work: limits, after-picture edits,
+                    now->after steps in a safe order (tests: test/imgparted_test.py)
+  imglib.sh         shared by imaging.sh / partitions.sh / imgbrowse.sh: drive
+                    and store pickers, BitLocker key entry, run_job
+  imgbrowse.sh      Browse an image (Disk imaging item 6): partition, folders,
+                    copy files out next to the image or to another USB drive
+  imgbrowse.py      serves a partition out of an image as a read-only NBD
+                    device (partclone bitmap + zstd frame index, no unpacking),
+                    mounts it read-only; copy with progress (tests:
+                    test/imgbrowse_test.py, run by the build)
+  mrimg.py          Macrium Reflect 7/8 images (.mrimg): reverse-engineered
+                    reader, every block MD5-checked; served as a drive (NBD)
+                    for Restore (cloned with Clone's plan), a partition for
+                    Browse; verify (tests: test/mrimg_test.py, run by the build)
+  vendor/quicklz131.c  QuickLZ 1.31 (GPL) - Macrium 8's compression; the build
+                    compiles it to /opt/diag/lib/libqlz.so on the host
   ui.py             Pillow framebuffer renderer (/dev/fb0), all screens + the
                     interactive tests (keyboard, pointer, touchscreen, camera)
   skins.py          the anime themes (mecha, kawaii): ui.py hands header,
                     card, grid, menus, badges, bars to it when SKIN is set;
                     --check / --shots DIR (the build runs --check)
+  i18n.py           Settings -> Language: T() translates every string at the
+                    font (Pillow's getmask2/getbbox/getlength are wrapped),
+                    Noto Sans CJK for Chinese/Japanese/Korean; --check
+  i18n/<lang>.json  the catalogues {"English": "translation"}, {0} = a value
   *test.sh etc      one script per test
   icons/            Ash's 24x24 PNG icon set (alpha used as a stencil)
-test/               QEMU harness: boot-vm.sh, screenshot, keystrokes, QMP touch
+test/               QEMU harness: boot-vm.sh, screenshot, keystrokes, QMP touch;
+                    imaging-loop.sh (imaging end to end on loop drives, root);
+                    i18n_extract.py (every on-screen string, for i18n/)
 docs/               HISTORY.md, dmi-board-swap.md
 ```
 
@@ -71,7 +105,8 @@ Secure Boot must be off (unsigned).
 
 ```bash
 test/boot-vm.sh          # or: usb (boot from virtual stick), touch (multitouch)
-# wait 2-3 min, then:
+# wait 2-3 min - the first screen is the Language menu (every boot): Enter
+test/k.sh ret
 test/shot.sh home && open /tmp/diagvm/home.png
 test/k.sh 7 ret          # keys: digits, arrows, ret, q, esc ...
 ```
@@ -113,6 +148,13 @@ radio, touchpad or battery. Say so when something is only VM-verified.
    must not be pulled.** Only the "run from RAM" (`toram`) entry allows it.
 8. RAM test region = (MemAvailable − 512 MB) × 75 %. Do not subtract Shmem
    again (MemAvailable already excludes tmpfs). Full coverage is MemTest86+.
+9. **Disk imaging never writes the drive it copies.** imgengine.py sets the
+   source read-only in the kernel for the whole job; only plans with
+   `ok: true` from imgplan.py may write a target, and ERASE is typed first.
+   The two writes to a source (discard hibernation, shrink C: on a SMART-
+   PASSED drive after typing SHRINK) are the operator's named choices.
+   Disk and partition IDs are kept on a clone - Windows boots by them.
+   Run `sudo test/imaging-loop.sh` after any change to img*.py.
 
 ## Conventions
 
@@ -127,7 +169,13 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   `back`, `hover`, `wheelup`/`wheeldown`. Any new widget loop must handle or
   ignore them, redraw only on change, and full-screen tests must run through
   `fullscreen()` in main (pointer off, no header refresh). `menu`/`gridmenu`
-  can answer `wifi`; tui.sh handles it — don't treat it as a choice.
+  can answer `wifi`; tui.sh handles it — don't treat it as a choice. `hover`
+  comes only once the pointer rests (`HOVER_SETTLE`, 60 ms): a full redraw
+  per hover froze the arrow (1.22). The arrow itself moves on every event,
+  and between screens the main loop moves it (`pump_pointer`).
+- A peripheral test that can fail for want of a driver is listed in
+  `driver_key` / `driver_followup` (menu.sh) with its drivers.tsv types: a
+  FAIL (or "NOT TESTED (no ...)") runs `drivercheck.sh --for` on those.
 - Report: `rsection`, `rsilent` → `/run/diag/report.txt`; one `RESULT:` line per
   test; `set_kv KEY value` → `summary.kv`.
 - Comments explain *why* (usually the bug that forced it). Keep that style.
@@ -143,7 +191,9 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   (each call restarts the loop), never inside the redraw loop. A phase that
   ends without a question or result screen (Full run's AUTO mode) must call
   `tui_anim_stop`. Keep the frame rate low where drawing would skew the
-  reading (battery drain fps=1, CPU idle baseline fps=2).
+  reading (battery drain fps=1, CPU idle baseline fps=2). Scenes play at 45
+  fps (`ssdanim.FPS`), except while a test measures: scenes in `MEASURING`
+  stay at 15 - add a new measuring scene there.
 - Network checks go out of the adapter under test (`ping -I`, `curl
   --interface`, DNS on a socket bound with SO_BINDTODEVICE) - use
   `netcheck.sh`, never a bare `ping`/`getent`: with Wi-Fi and a cable both
@@ -154,6 +204,17 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   (`charge.step`, `lid.step`, `sound.step` in `$RUN_DIR`): QEMU has no
   charger, lid or jack, so a guest script fakes them (test_power, uinput)
   in step with the test.
+- Languages: scripts keep writing English; the renderer translates at the
+  font (i18n.py). A new or reworded on-screen string shows in English until
+  it is in the catalogues: `python3 test/i18n_extract.py --merge
+  toolkit/i18n/zh_CN.json` lists what is missing. Code that cuts or wraps
+  text must work on `tr(text)` (ui.py) / `I.T()` first - a cut English
+  string matches nothing - and wrap with `i18n.tokens`/`join` (Chinese and
+  Japanese break between characters). Never cut screen text in bash: a long
+  sentence goes through `tui_para`, which the renderer wraps after
+  translating (op `para`; it answers the next free row). A plural made with
+  `%s` ("change%s") cannot match - write the two strings out. Test logic
+  never compares against drawn text. The report stays English.
 - Target machines run mawk, not gawk: no `strtonum`, `and()`, `gensub`.
 - Ioctl numbers/struct offsets: compile a C probe against `/usr/include/linux`
   headers — hand calculations were wrong several times.
@@ -204,6 +265,22 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   high-speed)`): split on `:[ \t]*`, not `: *`. A TAB in a tui value used to
   blank the field (the protocol's separator); `_s` in tui.sh now turns TABs
   and newlines into spaces, but parse cleanly anyway.
+- Settings live in RAM (`/run/diag/settings.conf`); `keep_settings`
+  (lib.sh) writes them to the boot stick after every change and
+  `restore_settings` reads them back in menu.sh *before* `start-ui.sh` -
+  ui.py reads settings once, at start-up. Ash boots from **Ventoy**: the
+  live medium is the read-only ISO image (`/dev/mapper/ventoy`; this
+  image's live-boot mounts the medium at `/usr/lib/live/mount/medium`, not
+  `/run/live/medium` - use `live_medium_dev`), and the
+  partition holding the ISOs is locked (`mount /dev/sdb1` fails). Ventoy
+  1.1.01+ maps that partition as a dm device named after it (`dm_named
+  sdb1`) - write through that, never the plain device.
+- Linux 7.0 (HWE) since 1.21; noble's 6.8 iwlwifi loads Intel firmware only
+  up to API 86 and Panther Lake's (Z40L-P) starts at 101 - "firmware
+  missing" with the file on the stick. 7.0 brought a VFIO "xe" directory
+  (drivers/vfio/pci/xe) that trips invariant 1's check - trim.sh removes
+  it - and intel_agp half-matching QEMU's 440FX host bridge (Driver check
+  treats an unbound Bridge as fine).
 - ui.py runs as `__main__` on the image: never look it up as
   `sys.modules["ui"]` (the checks import it as "ui", so only the VM shows
   the miss) - go through the screen object, `type(scr).__module__`.
@@ -229,7 +306,106 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   card-level element (badge-like, bar-like) needs a drawer in skins.py too.
   Look at both skins at 1024x768 and 150 % text (`skins.py --shots DIR`).
 
+- partclone: `-o FILE` refuses an existing file (even /dev/null) - use
+  `-O`; dev-to-dev (`-b`) compares the *partition* sizes, so a filesystem
+  already shrunk inside a big partition needs `-C`. `-I` copies an NTFS
+  marked for chkdsk (exact copy; never resize one). partclone.dd output has
+  no header (chkimg says "not partclone image") - check it through zstd.
+- Never parse a command's stdout+stderr together for a value: `losetup
+  --show` printed a warning on stderr and it became part of the device name
+  in a dm table. A loop over a file whose size is not a multiple of 512 warns.
+- FAT: the image kernel's default file-name charset is iso8859-1 (no
+  FAT_DEFAULT_UTF8) - a Chinese file name copied to a FAT32 stick failed
+  (EINVAL) or garbled. Mount vfat with `-o utf8` (`_mount_storage` does).
+- The build tree and the chroot outlive every quick build: a script removed
+  from toolkit/ (getfirmware.sh, 1.15) still shipped in 1.23. finalize clears
+  `/opt/diag/*.sh *.py` before copying; a build-tree sync must mirror
+  toolkit/, not copy over it.
+- ntfsresize leaves the volume flagged for chkdsk (by design - Windows checks
+  once). Volumes the toolkit resized are listed by serial in
+  `$RUN_DIR/ntfs-resized.list` and scan as "ok"; any other flagged NTFS is
+  "dirty" and is never resized.
+- Never edit a bash script while it runs (`test/imaging-loop.sh` takes ~20
+  min): bash reads it as it goes, and the run dies with exit 2 mid-way.
+- Pointer press / drag / release exist only while `kb.drag_mode` is on (the
+  partition editor). Everywhere else a press is still "click" - a release
+  arriving on the next screen would otherwise answer it.
+- Browse an image uses NBD's old ioctl interface on a socketpair (no
+  nbd-client): NBD_SET_SOCK and the other setup ioctls from one task,
+  NBD_DO_IT blocks in a thread for the whole connection. The bitmap's CRC32
+  (4 bytes) sits between the bitmap and the first block, and a checksum
+  follows every `blocks_per_checksum` blocks - offsets off by either read
+  plausible-looking garbage, which test/imgbrowse_test.py catches.
+  `fcntl.ioctl` passes a C int: NBD_SET_SIZE of anything over 2 GB
+  overflowed - imgbrowse's `ioctl()` goes through ctypes (unsigned long).
+- An image can only be read in the middle through diag/<part>.idx; the
+  reader refuses one whose frame sizes do not add up to the files (a lost
+  line would shift every offset after it).
+- Macrium .mrimg (mrimg.py): no published spec for Reflect 7/8 - the layout
+  came from the mrimg7z project and was checked against Ash's own image
+  and images Macrium made of known test disks (C:\Users\Ash\mrimg-test,
+  make-mrimg.ps1 - Macrium's command line wants the GPT disk GUID in upper
+  case). The u16 at metadata+8 is the split piece, +10 the incremental
+  number; "No compression" blocks carry no QuickLZ header; FAT partitions
+  keep their reserved sectors + FATs raw before the blocks. QuickLZ itself
+  never reports bad input - the per-block MD5 is the only check, keep it.
+- NBD devices now allow partitions (`modprobe nbd`, no max_part=0): Restore
+  from a Macrium image serves the whole drive and clones from nbdNp1...;
+  the kernel's table scan needs `blockdev --rereadpt` + `udevadm settle`.
+
 ## Open items
+
+- **1.22.0 on the bench** (VM only): the pointer on a real touchpad and
+  mouse (does it feel smooth now - HOVER_SETTLE 60 ms, one-write cursor);
+  45 fps animations on the slowest bench machine (frames are dropped, not
+  slowed - check the CPU it costs); a failed peripheral test fetching real
+  firmware online (VM proved only a driver started from the stick: the
+  e1000 unbound, then the Ethernet test fixed it and passed on re-run); the
+  battery log on Ash's Ventoy stick (written through Ventoy's mapping,
+  found again after the laptop dies) - VM tested only the "No USB stick"
+  warning with a fake BAT0 (`DIAG_PS_ROOT`).
+
+- **1.23.0 Macrium images** (WSL loop drives + VM): restore one of Ash's real
+  Reflect 8 images onto a real laptop and boot Windows from it; Browse a
+  real customer image. Not supported yet, each refused with the reason:
+  split images (several .mrimg files - the last piece holds the index, and
+  the records do not say which piece a block is in), incremental /
+  differential images, password-protected ones, MBR images with logical
+  partitions, Reflect X (.mrimgx - Macrium publishes that format, MIT, at
+  github.com/macrium/mrimgx_file_layout, if Ash moves to Reflect X).
+
+- **1.21.0 Linux 7.0 on the bench** (VM only): every model needs a pass on
+  the new kernel - screen (simpledrm, invariant 1), sound with gpu_bind=0,
+  touchpad, Wi-Fi. First the PORTEGE Z40L-P: does its Wi-Fi now come up
+  (iwlmld + iwlwifi-sc-a0-wh-b0-c10x), its touchpad (THC), its sound (SOF
+  for Panther Lake may need newer firmware than noble ships)?
+- **1.21.0 first boot in the VM once stopped in initramfs** ("mounting /run on
+  /root/run failed", also /sys, /proc) under heavy host I/O; a reset booted.
+  Not seen in other boots. If it shows on a real stick, look at live-boot's
+  medium wait (dmesg at that prompt).
+- **1.21.0 languages**: machine translations (Haiku, from the brief and
+  glossary in the 1.21 session) - ask a native speaker of each to look
+  through the screens. Long translations may clip on tight screens at 150 %.
+- **1.21.0 More info page** on real hardware: PCIe ports/slots counts, Wi-Fi
+  standard from `iw phy`, permanent MAC via `ethtool -P` (QEMU: no PCIe, no
+  Wi-Fi).
+
+- **1.21.0 disk imaging on real hardware** (loop drives in WSL + VM only):
+  a cloned Windows actually booting (GPT and MBR), BitLocker unlock with a
+  real recovery key (cryptsetup BITLK - never run against a real volume),
+  the Key ID shown, a Ventoy stick as the image store, a real Clonezilla
+  restoring a toolkit image. The partition editor's drag on a real touchpad
+  (click and hold) and touchscreen; a moved C: booting Windows. Browse an
+  image: a real customer image (large NTFS, a hibernated or dirty C: - ntfs3
+  then ntfs-3g read-only), a BitLocker partition saved locked and unlocked
+  at browse time, copying to a second USB drive; Clonezilla's own images are
+  refused (no index) - restore them instead.
+
+- **1.20.1 settings on Ash's real Ventoy stick**: VM-tested only with a
+  DIAGDATA stick (kept, restored after reboot, cleared by Reset) and a
+  dd-written stick (honest "read-only image" message). Writing through
+  Ventoy's dm copy of its partition (1.1.01+) has never run - ask Ash which
+  message the theme change shows, and for `/run/diag/settings.log`.
 
 - **1.20 needs real-hardware checks** (VM-tested with fakes only):
   - Wi-Fi per-antenna signal and retries on the AX201: does iwlwifi put

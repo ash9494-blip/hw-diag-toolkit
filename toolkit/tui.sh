@@ -76,6 +76,12 @@ tui_badge() { _s badge "$1" "$2" "${3:-}"; }
 tui_thead() { local r=$1; shift; _s thead "$r" "$@"; }
 tui_trow()  { local r=$1; shift; _s trow  "$r" "$@"; }
 tui_flush() { _s flush; }
+# A drive as a bar of partitions: row, caption, then imgengine.py's mapspec
+# ("bytes|kind|label|used;..."). It takes the caption row and the next two.
+tui_diskmap() { _s diskmap "$1" "$2" "$3"; }
+# The partition editor (ui.py PartEditor) on a state file from imgparted.py.
+# PE_ANSWER: back, apply, new|gap, format|i, size|i, menu|i.
+tui_partedit() { _ask partedit "$1"; PE_ANSWER=$UI_ANS; }
 
 # Change a renderer setting (theme, textscale) for the rest of the session.
 tui_setting() { _s setting "$1" "$2"; }
@@ -95,6 +101,20 @@ tui_menu() {
   local title=$1 hint=$2; shift 2
   while :; do
     _ask menu "$title" "$hint" "$@"
+    [ "$UI_ANS" = wifi ] || break
+    _wifi_shortcut
+  done
+  case "$UI_ANS" in ''|0|*[!0-9]*) return 1 ;; esac
+  TUI_CHOICE=$UI_ANS
+  return 0
+}
+
+# tui_menu that opens with item $1 (1-based) chosen, not the first - the boot
+# language prompt opens on the language already in use.
+tui_menu_at() {
+  local at=$1 title=$2 hint=$3; shift 3
+  while :; do
+    _ask menuat "$at" "$title" "$hint" "$@"
     [ "$UI_ANS" = wifi ] || break
     _wifi_shortcut
   done
@@ -132,14 +152,12 @@ tui_anim_stop() { _s animstop; }
 
 # A line too long for the screen, wrapped at word boundaries over the rows
 # from $1 (a single tui_line is cut off at the edge). Echoes the next free row.
+# The renderer wraps it, after translating: cut here into 95-character pieces,
+# no English piece matched a catalogue entry (1.21). The width is the text
+# interface's (tui-text.sh); in pixels the card's own width is the limit.
 tui_para() {   # row text [tone] [width]
-  local row=$1 text=$2 tone=${3:-} w=${4:-95} line
-  while [ -n "$text" ]; do
-    if [ ${#text} -le "$w" ]; then line=$text; text=""
-    else line=${text:0:$w}; line=${line% *}; text=${text:${#line}}; text=${text# }; fi
-    tui_line "$row" "$line" "$tone"; row=$((row+1))
-  done
-  echo "$row"
+  _ask para "$1" "$2" "${3:-}"
+  case "$UI_ANS" in ''|*[!0-9]*) echo $(($1 + 1)) ;; *) echo "$UI_ANS" ;; esac
 }
 
 tui_confirm() {
@@ -151,6 +169,9 @@ tui_confirm() {
 tui_input() { _ask input "$1" "$2"; TUI_TEXT=$UI_ANS; }
 
 tui_anykey() { _ask anykey; }
+# tui_anykey that also takes the given letters ("m") and says in $TUI_KEY which
+# key ended it (enter, esc, q, m...) - for a screen with a second page.
+tui_keys() { _ask anykey "$1"; TUI_KEY=${UI_ANS:-enter}; }
 
 tui_pager() { _ask pager "$1" "$2"; }
 

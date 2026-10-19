@@ -100,6 +100,20 @@ tui_anykey() {
   while :; do k=$(tui_key); case "$k" in ENTER|ESC|q|Q|' ') break ;; esac; done
 }
 
+tui_keys() {   # letters -> TUI_KEY: enter, esc, q, space or one of the letters
+  TUI_KEY=enter
+  [ -t 0 ] || return 0
+  local k
+  while :; do
+    k=$(tui_key)
+    case "$k" in
+      ENTER) TUI_KEY=enter; return ;; ESC) TUI_KEY=esc; return ;;
+      q|Q) TUI_KEY=q; return ;; ' ') TUI_KEY=space; return ;;
+    esac
+    [ ${#k} = 1 ] && case "$1" in *"${k,,}"*) TUI_KEY=${k,,}; return ;; esac
+  done
+}
+
 # ---------- menu -------------------------------------------------------------
 # tui_menu <title> <hint> <label>...   -> TUI_CHOICE (1-based), rc 1 on cancel
 TUI_CHOICE=0
@@ -131,6 +145,10 @@ tui_menu() {
     esac
   done
 }
+
+# tui_menu_at (row to open on, then as tui_menu): the text list always opens
+# on the first row.
+tui_menu_at() { shift; tui_menu "$@"; }
 
 # tui_grid takes "Label|icon" entries. There are no tiles on a text console, so
 # the icon name is dropped and it becomes an ordinary list.
@@ -206,6 +224,33 @@ tui_kv() {
 }
 
 tui_line() { tui_at "$1" $((TUI_PAD+3)); printf '%s%s%s%s' "${3:-$FG}" "$2" "$R" "${E}[K"; }
+# A line too long for one row, wrapped at word boundaries over the rows from
+# $1. Echoes the next free row. (Only tui.sh had it, so in the text interface
+# the tests that call it - charging, CPU, controller, error log - lost lines.)
+tui_para() {   # row text [tone] [width]
+  local row=$1 text=$2 tone=${3:-} w=${4:-95} line
+  while [ -n "$text" ]; do
+    if [ ${#text} -le "$w" ]; then line=$text; text=""
+    else line=${text:0:$w}; line=${line% *}; text=${text:${#line}}; text=${text# }; fi
+    tui_line "$row" "$line" "$tone"; row=$((row+1))
+  done
+  echo "$row"
+}
+
+# No dragging without the renderer: partitions.sh runs its menu version.
+tui_partedit() { PE_ANSWER=text; }
+
+# The text interface has no bar: the caption, then the partitions in order.
+tui_diskmap() {
+  local row=$1 segs=$3 out="" seg
+  tui_line "$row" "$2" "$MUTE"
+  IFS=';' read -ra segs <<<"$3"
+  for seg in "${segs[@]}"; do
+    IFS='|' read -r _ _ label _ <<<"$seg"
+    out="$out[ $label ] "
+  done
+  tui_line $((row+1)) "${out:0:$((TUI_W-6))}"
+}
 
 # ---------- pager ------------------------------------------------------------
 tui_pager() {

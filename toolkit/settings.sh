@@ -2,9 +2,9 @@
 # System settings.
 #
 # Everything here changes how the toolkit behaves on this bench, not what it
-# measures. Each setting takes effect immediately and is written to the run
-# directory so it survives the renderer restarting; "Save to the USB stick"
-# copies them onto the boot medium so the next machine starts the same way.
+# measures. Each setting takes effect immediately, is written to the run
+# directory so it survives the renderer restarting, and is kept on the boot
+# stick (keep_settings in lib.sh) so the next boot starts the same way.
 . /opt/diag/lib.sh
 . /opt/diag/tui.sh
 
@@ -16,12 +16,24 @@ get() {   # key default
   printf '%s' "${v:-$2}"
 }
 
-put() {   # key value - rewrite the one line, keep the rest
+put() {   # key value - rewrite the one line, keep the rest, then onto the stick
   local k=$1 v=$2 tmp=$RUN_DIR/.settings.new
   touch "$SETTINGS" 2>/dev/null
   grep -v "^$k=" "$SETTINGS" 2>/dev/null > "$tmp"
   printf '%s=%s\n' "$k" "$v" >> "$tmp"
   mv "$tmp" "$SETTINGS"
+  keep
+}
+
+# After every change: onto the boot stick, and the lines that tell the
+# operator whether the next boot will have it. Up to 1.20.0 a change silently
+# lasted only until power-off unless it was saved by hand.
+keep() {
+  if keep_settings; then
+    KEEP_LINES=("Kept on the USB stick ($KEPT_ON) - the next boot starts with it.")
+  else
+    KEEP_LINES=("Only until the laptop is switched off -" "$KEEP_WHY." "$KEEP_FIX")
+  fi
 }
 
 theme_label() {
@@ -56,12 +68,13 @@ set_theme() {
     "Kawaii pastel|anime: a pink sticker sheet, results as reward stamps" || return
   local t
   case "$TUI_CHOICE" in 1) t=light ;; 2) t=dark ;; 3) t=contrast ;; 4) t=mecha ;; 5) t=kawaii ;; esac
-  put theme "$t"
+  # the renderer first, then the stick: writing to the stick takes a moment
   tui_setting theme "$t"
+  put theme "$t"
   # Redraw something so the change is visible straight away rather than at the
   # next screen the operator happens to open.
   tui_msg "Theme changed" "Now using: $(theme_label "$t")" "" \
-    "Every screen from here on uses it."
+    "Every screen from here on uses it." "" "${KEEP_LINES[@]}"
 }
 
 look_label() {
@@ -79,9 +92,9 @@ set_look() {
     "Classic tiles|white tiles on grey, as before 1.13" || return
   local v
   case "$TUI_CHOICE" in 1) v=manual ;; 2) v=classic ;; esac
-  put look "$v"
   tui_setting look "$v"
-  tui_msg "Menu style changed" "Now using: $(look_label "$v")"
+  put look "$v"
+  tui_msg "Menu style changed" "Now using: $(look_label "$v")" "" "${KEEP_LINES[@]}"
 }
 
 set_text_size() {
@@ -93,12 +106,65 @@ set_text_size() {
     "Huge (200%)|for reading across the bench" || return
   local v
   case "$TUI_CHOICE" in 1) v=1.0 ;; 2) v=1.25 ;; 3) v=1.5 ;; 4) v=2.0 ;; esac
-  put textscale "$v"
   tui_setting textscale "$v"
+  put textscale "$v"
   tui_msg "Text size changed" "Now using: $(scale_label "$v")" "" \
     "Larger text means fewer lines fit on a screen, so long" \
-    "reports scroll more."
+    "reports scroll more." "" "${KEEP_LINES[@]}"
 }
+
+lang_label() {
+  case "$1" in
+    en_GB) printf 'English (UK)' ;;
+    zh_CN) printf '简体中文 - Chinese (Simplified)' ;;
+    zh_TW) printf '繁體中文 - Chinese (Traditional)' ;;
+    ja)    printf '日本語 - Japanese' ;;
+    ko)    printf '한국어 - Korean' ;;
+    *)     printf 'English' ;;
+  esac
+}
+
+# Every screen, in the renderer (i18n.py); each language is listed in its own
+# script so it can be found whatever language is on. The saved report stays
+# English, and so does the text-only fallback (the console has no CJK font).
+LANG_CODES=(en en_GB zh_CN zh_TW ja ko)
+LANG_ITEMS=("English|" "English (UK)|British spelling: colour, centre"
+  "简体中文|Chinese (Simplified)" "繁體中文|Chinese (Traditional)"
+  "日本語|Japanese" "한국어|Korean")
+
+set_language() {
+  local cur; cur=$(get lang en)
+  tui_menu "Language" "currently: $(lang_label "$cur")" "${LANG_ITEMS[@]}" || return
+  local v=${LANG_CODES[$((TUI_CHOICE-1))]}
+  tui_setting lang "$v"
+  put lang "$v"
+  tui_msg "Language changed" "Now using: $(lang_label "$v")" "" \
+    "The saved report stays in English." "" "${KEEP_LINES[@]}"
+}
+
+# Every boot, after GRUB and before the home screen (menu.sh; Ash, 1.22).
+# Opens on the language kept on the stick, so Enter (or Q) goes on with it;
+# a new choice is kept for the next boot like any other setting. The title is
+# in every language at once - whoever is at the bench can find theirs.
+boot_language() {
+  local cur at=1 i v
+  cur=$(get lang en)
+  for i in "${!LANG_CODES[@]}"; do
+    [ "${LANG_CODES[$i]}" = "$cur" ] && at=$((i + 1))
+  done
+  tui_menu_at "$at" "Language  /  语言  /  語言  /  言語  /  언어" \
+    "arrows + Enter to choose      Q = keep $(lang_label "$cur")" "${LANG_ITEMS[@]}" || return 0
+  v=${LANG_CODES[$((TUI_CHOICE-1))]}
+  [ "$v" = "$cur" ] && return 0
+  tui_setting lang "$v"
+  put lang "$v"
+  return 0
+}
+
+if [ "$1" = --boot-language ]; then
+  boot_language
+  exit 0
+fi
 
 set_layout_default() {
   local cur; cur=$(cat "$RUN_DIR/layout" 2>/dev/null || echo compact)
@@ -109,7 +175,7 @@ set_layout_default() {
     1) printf 'compact\n' > "$RUN_DIR/layout"; put layout compact ;;
     2) printf 'all\n'     > "$RUN_DIR/layout"; put layout all ;;
   esac
-  tui_msg "Saved" "The main menu will open on that layout."
+  tui_msg "Saved" "The main menu will open on that layout." "" "${KEEP_LINES[@]}"
 }
 
 set_wifi_default() {
@@ -122,7 +188,7 @@ set_wifi_default() {
   esac
   put wifi_secs "$v"
   tui_msg "Saved" "The wireless test will offer this first." "" \
-    "You can still pick a different length each time you run it."
+    "You can still pick a different length each time you run it." "" "${KEEP_LINES[@]}"
 }
 
 set_disk_default() {
@@ -133,27 +199,26 @@ set_disk_default() {
   local v
   case "$TUI_CHOICE" in 1) v=1G ;; 2) v=4G ;; 3) v=16G ;; 4) v=64G ;; esac
   put disk_size "$v"
-  tui_msg "Saved" "The disk benchmark will start on $v."
+  tui_msg "Saved" "The disk benchmark will start on $v." "" "${KEEP_LINES[@]}"
 }
 
-save_to_stick() {
-  STORAGE_PROMPT="Which drive should the settings be kept on?"
-  pick_storage || return
-  if ! mount_storage; then
-    tui_msg "Could not write" "$(head -1 "$RUN_DIR/mnterr" 2>/dev/null)"
+# Every change is kept as it is made; this shows where, and tries again - after
+# a partition labelled DIAGDATA was plugged in, say. The old "pick a drive"
+# save wrote wherever it was told, and the next boot only ever looked inside
+# the ISO, so a saved theme never came back.
+show_kept() {
+  if [ ! -s "$SETTINGS" ]; then
+    tui_msg "Nothing to keep" "Every setting is at its default." "" \
+      "Change one and it is kept on the USB stick straight away."
     return
   fi
-  if cp "$SETTINGS" "$STORAGE_MNT/diag-settings.conf" 2>/dev/null; then
-    sync
-    local owned=$STORAGE_OWNED
-    umount_storage
-    tui_msg "Settings saved" "Written to diag-settings.conf on the drive." "" \
-      "They are picked up automatically the next time the toolkit" \
-      "boots from it." \
-      "$([ "$owned" = 1 ] && echo "The drive has been unmounted - safe to remove." || echo "")"
+  keep
+  if [ -n "$KEPT_ON" ]; then
+    tui_msg "Settings kept" "On the USB stick: $KEPT_ON, in $SETTINGS_NAME." "" \
+      "Every change is kept there as it is made, and the next boot" \
+      "starts with them."
   else
-    umount_storage
-    tui_msg "Could not write" "The settings file could not be copied there."
+    tui_msg "Settings not kept" "${KEEP_LINES[@]}"
   fi
 }
 
@@ -169,7 +234,10 @@ reset_all() {
   tui_setting theme light
   tui_setting look manual
   tui_setting textscale 1.0
-  tui_msg "Reset" "Everything is back to its default."
+  tui_setting lang en
+  keep   # no settings file: the stick's copy goes too, or the next boot undoes this
+  tui_msg "Reset" "Everything is back to its default." "" \
+    "$([ -n "$KEPT_ON" ] && echo "The copy on the USB stick ($KEPT_ON) was cleared too.")"
 }
 
 show_about() {
@@ -192,21 +260,23 @@ while :; do
     "Colour theme|$(theme_label "$(get theme light)")" \
     "Menu style|$(look_label "$(get look manual)")" \
     "Text size|$(scale_label "$(get textscale 1.0)")" \
+    "Language|$(lang_label "$(get lang en)")" \
     "Opening menu|$(cat "$RUN_DIR/layout" 2>/dev/null || echo compact)" \
     "Wireless test length|$(secs_ms "$(get wifi_secs 600)")" \
     "Disk benchmark size|$(get disk_size 1G)" \
-    "Save settings to the USB stick|so the next machine starts the same way" \
+    "Keep settings on the USB stick|done after every change - this shows where" \
     "About this toolkit|version, kernel, uptime" \
     "Reset everything|back to defaults" || break
   case "$TUI_CHOICE" in
     1) set_theme ;;
     2) set_look ;;
     3) set_text_size ;;
-    4) set_layout_default ;;
-    5) set_wifi_default ;;
-    6) set_disk_default ;;
-    7) save_to_stick ;;
-    8) show_about ;;
-    9) reset_all ;;
+    4) set_language ;;
+    5) set_layout_default ;;
+    6) set_wifi_default ;;
+    7) set_disk_default ;;
+    8) show_kept ;;
+    9) show_about ;;
+    10) reset_all ;;
   esac
 done

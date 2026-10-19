@@ -3,6 +3,240 @@
 Newest first. Each entry says what changed and why; the "why" is usually a
 real machine on Ash's bench.
 
+## 1.23.0 — 2026-10-12
+- **Macrium Reflect images** (Ash: "my macrium back up image is not readable,
+  means that all of my previous image is failed to load"). Disk imaging now
+  restores, browses and checks the .mrimg files Macrium Reflect 7/8 made -
+  they show in the image list beside the toolkit's and Clonezilla's.
+  - Macrium never published the Reflect 7/8 format. The layout comes from the
+    mrimg7z project (reverse-engineered) and was checked against Ash's own
+    image (PORTEGE X40-K, Windows 11, 512 GB, five partitions) and against
+    images Macrium 8 made of known test disks - no compression, Medium,
+    High, GPT and MBR: every file read back identical. Every block read is
+    checked against the MD5 the image keeps for it, so a misread or damaged
+    block stops the job instead of reaching a customer's drive.
+  - Restore: the image is served as the drive it was made from (read-only)
+    and restored with Clone's own plan - C: resized to fit the new drive,
+    disk and partition IDs kept, the copy read back.
+  - Browse an image and Check an image take Macrium images too.
+  - Not yet: split images (several files), incremental / differential and
+    password-protected images - each is listed with the reason, and Macrium
+    itself restores them.
+  - QuickLZ 1.31 (Macrium's compression, GPL) is built into the image as
+    libqlz.so; `setup-host.sh` now installs gcc for it.
+
+## 1.22.0 — 2026-10-12
+Seven bench requests from Ash after 1.21.0.
+- **Language at every boot**: after GRUB, before the home screen, a Language
+  menu (title in all five scripts) opens on the language kept on the stick -
+  Enter or Q goes on with it, a new choice is kept for the next boot. Not on
+  the text console (no CJK font). New `tui_menu_at` / ui.py op `menuat`: a
+  menu that opens on a given row. The language list's own names ("English",
+  "English (UK)") are no longer translated - in Chinese the list said 英语.
+- **A failed peripheral test looks for its driver** (Touchpad, Touchscreen,
+  Sound, Camera, SD card, Wi-Fi, Ethernet, USB ports): menu.sh runs
+  `drivercheck.sh --for` on that kind of device only, and anything not working
+  is fixed with no question - known fixes, a driver restart, the missing
+  firmware fetched online - then the test is offered again. A test that found
+  no device at all is checked quietly: it only speaks when something can be
+  fixed (a laptop without a touchscreen is not news).
+- **Results text**: the report page drew at twice the body size on top of the
+  Text size setting (4x at Huge). It opens at body size now; - and + step it
+  from 80 % to 200 %, kept until the renderer restarts. At Huge the first
+  lines no longer run into the title.
+- **Disk imaging is tile 7**, beside Keyboard (was 18) - in both layouts;
+  every tile after it moved up one.
+- **Battery test without a USB stick** warns before the drain starts: "No USB
+  stick for the battery log" - Check again, or Run without saving (the log in
+  memory: press Q before it runs flat). Only USB sticks are offered for the
+  log now (DIAGDATA, the boot stick through Ventoy's mapping, other sticks -
+  never the laptop's own drives), and an interrupted log on a Ventoy stick is
+  found again after the laptop dies.
+- **Smoother pointer**: it moved like 10 Hz. Every hover that moved the
+  highlight redrew the whole screen (150 ms for the home sheet) and the arrow
+  froze for each. A hover now arrives once the pointer rests (60 ms); the
+  arrow moves on every event, in one write instead of erase-then-paint
+  (it flickered); between screens the main loop moves it too (it stood still,
+  then jumped). Redrawing is cheaper as well: text widths and drawn icons
+  are cached (home sheet 152 -> 100 ms).
+- **Animations at 45 frames a second** (were 15): a frame costs 15-22 ms on
+  an i7-8665U. While a test measures (disk, controller, install, RAM, CPU,
+  network) its scene stays at 15 - at 45 the drawing takes most of a core,
+  which a 2-core bench machine would take out of the figures.
+- Keys: keypad + / - and Shift+= / Shift+- now type "+" and "_" (a Wi-Fi
+  password with "+" got "=").
+
+## 1.21.0 — 2026-10-08
+- **Disk imaging** (`imaging.sh`, tile 18 on the home grid; Ash: "clone/backup
+  image, split partition, works like macrium"). Stage 1 of 3: clone, back up,
+  restore and check whole drives. Macrium's own format and its WinPE disk
+  were not used - closed, and nothing to build on; the work is partclone,
+  ntfsresize and sfdisk, the tools Clonezilla and GParted are made of.
+  - **Clone a drive**: everything before C: (EFI, MSR, System Reserved) keeps
+    its place and size; C: takes up the difference; whatever follows it (the
+    WinRE partition) keeps its size and moves to the end. Disk and partition
+    IDs stay the same - Windows' boot entries find C: by them. Only the used
+    blocks are copied (partclone).
+  - **Smaller new drive**: C: is copied onto a device as big as it used to be
+    - the new partition plus a scratch area (device-mapper snapshot) - and
+    shrunk there, so the overflow lands inside the new partition. The old
+    drive is never written. ntfsresize's dry run says first how much has to
+    move: memory when it fits, else a USB drive, else (Ash's choice) C: is
+    shrunk on the old drive itself - only if SMART says PASSED, only after
+    SHRINK is typed, and grown back afterwards.
+  - **The drive being copied is set read-only in the kernel** (`blockdev
+    --setro`) for the whole job, and put back afterwards, even when stopped.
+  - **BitLocker**: unlocked read-only with the 48-digit recovery key (the
+    screen shows the Key ID to look it up by), then copied data-only and
+    resizable - BitLocker is off on the copy, and the screen says so. Left
+    locked, it is copied sector for sector at full size.
+  - **Fast Startup / hibernation and chkdsk flags** are read from the drive
+    (hiberfil.sys's "HIBR" - ntfsresize --info does not look). Such a C:
+    copies as it is; when resizing is what it blocks, the screen offers to
+    discard the saved session (or clear the flag) by name.
+  - **Back up / restore / check an image**: to a USB drive or the toolkit
+    stick's own Ventoy partition (through Ventoy's mapping, like the
+    settings). The folder is Clonezilla's layout and file names, so
+    Clonezilla restores it, and Clonezilla images restore here. Restore
+    resizes to the target drive like a clone. Check reads every partition
+    back through partclone's checksums.
+  - Every write goes through a plan the planner approved: a refused plan
+    once reached the drive in testing and wrote its table - the engine now
+    checks. ERASE is typed before any drive is replaced.
+  - Tested (`test/imaging-loop.sh`, 51 checks on loop drives in WSL): clone
+    bigger, smaller through scratch, smaller by source shrink, back up,
+    verify (a damaged image is caught), restore bigger and smaller, restore
+    a Clonezilla-only image, an MBR drive (signature, boot flag, boot code),
+    a refused plan, Q mid-copy. Every file checksummed; the source image
+    file unchanged to the byte. `test/imgplan_test.py` (20 layout cases) runs
+    in the build. Not yet on real hardware: a real Windows boot after a
+    clone, BitLocker unlock (no BitLocker volume to test with), a Ventoy
+    stick as the image store.
+- **Partitions** (Disk imaging -> Partitions, `partitions.sh`; Ash: "drag and
+  drop partition, create partition on unallocated space"). Stage 2 of 3.
+  - The drive is drawn twice, now and after - Ash's pick of three rendered
+    samples. The After bar is dragged with the mouse, touchpad (click and
+    hold) or touchscreen: an edge resizes, the middle moves. Keys do the
+    same ([ ] size, Shift+arrows move). New in free space (NTFS, exFAT,
+    FAT32, ext4), delete, format, exact size, undo.
+  - Each partition says how far it can go: C: down to what it holds plus
+    room; FAT, MSR and BitLocker partitions move but keep their size; a
+    hibernated or chkdsk-flagged C: neither moves nor resizes, with the
+    reason and the fix on screen.
+  - Nothing is written until Apply, which lists the steps in the order they
+    run (deletes, shrinks, moves, grows, then new partitions and formats),
+    defaults to NO and wants ERASE typed when anything is deleted or
+    formatted, APPLY otherwise. A move asks for the charger on battery, and
+    Q during a move waits for it to finish - half a move is a lost partition.
+  - Moves are sfdisk's own (`--move-data`), its progress read from the
+    kernel's write count; a moved NTFS gets its boot sectors' start fixed.
+    The table on the drive is checked against the plan afterwards.
+  - A C: the toolkit resized this session is no longer taken for "marked
+    for a disk check" (ntfsresize flags it for Windows on purpose), so it can
+    be resized again without a reboot.
+  - Tested: `test/imgparted_test.py` (18 cases, in the build) and the loop
+    drives - split C: (data moved) into C: + D:, move Recovery left and
+    right with C: grown, format and delete, Q during a move.
+- **Browse an image** (Disk imaging -> Browse an image, `imgbrowse.sh`; Ash:
+  "Browse files in image"). Stage 3 of 3 - a customer's Documents back out
+  of a backup without restoring the drive.
+  - The partition is read straight out of the image: partclone's bitmap says
+    where each block sits in the stream, the frame index saved with every
+    image (diag/<part>.idx) says which 32 MB zstd frame holds it. Served to
+    the kernel as a read-only block device (NBD, no network) and mounted
+    read-only - the image is never written, and nothing is unpacked first.
+  - Pick the partition (C:, EFI, Recovery, D:...), walk its folders, copy a
+    file or a folder next to the image or to another USB drive, with
+    progress; an existing copy is never overwritten ("Documents (2)",
+    "report (2).docx"). A BitLocker partition saved locked opens with the
+    recovery key, read-only. FAT32 drives are refused for a file over 4 GB,
+    up front, and FAT is mounted with UTF-8 names (the kernel's default,
+    iso8859-1, cannot write a Chinese file name).
+  - A copy says exactly what is missing: a file or folder the image cannot
+    give back is named, never quietly left out, and a drive that stops
+    taking writes is blamed, not the image; no half-written file is left
+    under its real name. Only folders and ordinary files are shown - an
+    ext4 image's FIFOs and device nodes would hang a copy or read this
+    laptop's own disk (mounted nodev).
+  - Clonezilla's own images (one zstd frame, or gzip) cannot be read in the
+    middle; the list says so - restore them instead.
+  - Tested: `test/imgbrowse_test.py` (19 cases, in the build: block layouts,
+    checksums, frames cut mid-block, image pieces, a damaged frame, the
+    partition's full size; listing and copying with a FIFO, a link, read and
+    write errors) and the loop drives - every file of C: and EFI read back
+    out of a backup, copy, read-only device and mount, a wrong index
+    refused.
+- Text interface: `tui_para` was missing, so charging, CPU, controller check
+  and error log lost their wrapped lines when there was no framebuffer.
+- **Linux 7.0** (noble's HWE kernel) instead of 6.8, for every machine (Ash's
+  choice). The PORTEGE Z40L-P (Core Ultra 5 325, Panther Lake) showed its
+  Wi-Fi as "firmware missing" and Fix downloaded the package again:
+  - its firmware was on the stick all along (versions 101 to 103)
+  - Linux 6.8's driver loads Intel firmware only up to version 86
+
+  Linux 7.0's driver (iwlmld) loads it. The build now asserts kernel 7.0+,
+  Intel's Wi-Fi 7 driver, the THC touchpad controller (Lunar / Panther
+  Lake) and the modules disk imaging needs. trim.sh also removes 7.0's new
+  VFIO "xe" helper, which the graphics check (invariant 1) flagged.
+- **Driver check**: when a driver's firmware is on the stick but only in
+  versions it cannot load, it now says the toolkit is too old for the
+  device, not that the device is faulty, and Fix offers no download. The
+  closing line no longer blames "the part itself, its connector, or a BIOS
+  setting" in that case. A host bridge that only an old chipset driver
+  half-matches (intel_agp on QEMU's 440FX, new with 7.0) is not "not
+  working".
+- **System information -> More info** (M on the System page; Ash):
+  - the motherboard
+  - each Ethernet card with its MAC address and port speed (the port is
+    switched on first; "up to 1 Gbps - now: 1000 Mbps, full duplex")
+  - each Wi-Fi card with its MAC address, the Wi-Fi standard it can do (Wi-Fi
+    4 to 7, with 6E when it has 6 GHz) and the bands, and the link it has
+    now when connected
+  - PCIe: the ports in use of those the BIOS enabled, the fastest
+    generation, and each device's link against what it can do
+  - a card with no driver running is listed as such, not left out
+  - all of it in the report as well
+- **Languages** (Settings -> Language, item 4; Ash): English, English (UK),
+  简体中文, 繁體中文, 日本語, 한국어 - every screen, translated in the
+  renderer (`i18n.py`) as each string is drawn, so no test script changed
+  and the tests still read their own figures in English. Chinese, Japanese
+  and Korean are drawn in Noto Sans CJK (fonts-noto-cjk, Sans only). The
+  catalogues (`toolkit/i18n/`) are machine translations of the ~3,400
+  strings `test/i18n_extract.py` finds; they want a native speaker's check.
+  English (UK) is spelling rules (colour, centre, analyse). The saved report
+  and the text-only fallback stay in English. Long explanations
+  (`tui_para`: a test's likely cause and what to do) are now wrapped by the
+  renderer after translating - bash cut them into 95-character English
+  pieces, which no catalogue entry could match. Wrapped lines keep the
+  spaces as written (a file name "报告 2025.docx" lost its space) and never
+  start with closing punctuation (）。，). FAT sticks are mounted with UTF-8
+  names, so Chinese file names copy out of an image intact.
+
+## 1.20.1 — 2026-10-08
+- **A changed theme came back as the old one after a reboot** (Ash). Three
+  faults stacked:
+  - Settings live in RAM; keeping them took "Save settings to the USB stick".
+  - Even then, the next boot only looked inside the ISO's own filesystem. On
+    a Ventoy stick that is the read-only ISO image, so the saved copy was
+    never found.
+  - When it was found, it was copied in after the renderer had already
+    started and read its settings, so the first screens kept the default.
+
+  Now every change (theme, menu style, text size, opening menu, test
+  defaults) is written to the boot stick as it is made, and read back before
+  the renderer starts. Where it goes:
+  - a partition labelled DIAGDATA, if there is one
+  - otherwise the boot stick's own partition: a FAT stick's medium, or
+    Ventoy's partition through the device-mapper copy that Ventoy 1.1.01 and
+    later make of it - the plain device is locked while an ISO on it is
+    booted
+
+  Never the laptop's own drives, and never a stick plugged in for a test.
+  Every change message says whether the next boot will have it; when it
+  will not, it says why (an older Ventoy, a dd-written stick, booted from a
+  CD) and what to do. Settings item 7 now shows where they are kept, and
+  Reset clears the stick's copy too.
+
 ## 1.20.0 — 2026-10-07
 New tests from the 1.19 review (Ash: "go ahead"), and network checks taken
 from the netprobe agent where they apply to a laptop on the bench.
