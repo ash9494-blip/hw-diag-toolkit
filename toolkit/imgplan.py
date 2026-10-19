@@ -161,19 +161,25 @@ def plan(src, target, keep_size=False):
         notes.append("C: is copied unlocked: BitLocker will be OFF on the new drive. "
                      "Turn it back on in Windows if the customer needs it.")
 
+    # the notes about sizes and free space, kept apart as well: when the
+    # sizes are changed by hand on the plan screen (imgplanedit.py) exactly
+    # these are written again, and the rest stay as they are
+    lay = []
     if any(_is_extended(label, q) for q in parts):
         notes.append("This drive has extended partitions, so the layout is copied "
                      "exactly as it is.")
-        free = _same_layout(src, parts, end_limit, sec, system, errors, notes)
+        free = _same_layout(src, parts, end_limit, sec, system, errors, lay)
     elif keep_size:
-        free = _same_layout(src, parts, end_limit, sec, system, errors, notes)
+        free = _same_layout(src, parts, end_limit, sec, system, errors, lay)
     elif system is None or not resizable(system):
-        free = _same_layout(src, parts, end_limit, sec, system, errors, notes,
+        free = _same_layout(src, parts, end_limit, sec, system, errors, lay,
                             why=_why_fixed(system) if system else None)
     else:
         free = _resize_system(parts, parts.index(system), end_limit, align, sec,
-                              errors, notes)
+                              errors, lay)
         out["resize"] = parts.index(system) if (system["grow"] or system["shrink"]) else None
+    notes.extend(lay)
+    out["layout_notes"] = lay
 
     if errors:
         return out

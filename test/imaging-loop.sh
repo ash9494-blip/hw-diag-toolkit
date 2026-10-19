@@ -162,6 +162,34 @@ if want clone-bigger; then
   src_same clone-bigger
 fi
 
+if want clone-edited; then
+  # the plan screen's sizes editor (imgplanedit.py, 1.24): what a drag of
+  # C:'s edge, a drag of WinRE and N on the gap do, through its command line
+  say "clone-edited: 4 GB -> 6 GB, sizes set by hand - C: 2.5 GB, WinRE +300 MB, new DATA"
+  PX="python3 $HERE/../toolkit/imgplanedit.py"
+  T=$(fresh_target "$W/t1e.img" 6000)
+  $ENG plan "$W/scan.json" "${T#/dev/}" > "$W/plan1e.json"
+  $PX open "$W/plan1e.json" "$W/pe.json" "Old drive" "New drive" "Sizes on the new drive"
+  $PX geom "$W/pe.json" 2 "$(jq '.after[2].start' "$W/pe.json")" $(( 2560 * 2048 ))
+  rs=$(jq '.after[3].start' "$W/pe.json"); rz=$(jq '.after[3].size' "$W/pe.json")
+  $PX geom "$W/pe.json" 3 $(( rs - 300 * 2048 )) $(( rz + 300 * 2048 ))
+  $PX new "$W/pe.json" 0 ntfs DATA
+  $PX ops "$W/pe.json" | sed 's/^/  /'
+  if $PX done "$W/pe.json" "$W/plan1e.json"; then ok "clone-edited: the edited plan is accepted"
+  else bad "clone-edited: the edited plan was refused"; fi
+  $ENG rows "$W/plan1e.json"
+  $ENG clone "$W/plan1e.json" --status "$W/s1e" --scratch /dev/shm
+  status_is "$W/s1e" ok clone-edited
+  check_all "$T" clone-edited
+  [ "$(sfdisk --json "$T" | jq '.partitiontable.partitions[] | select(.node | endswith("p3")) | .size')" = $(( 2560 * 2048 )) ] \
+    && ok "clone-edited: C: is 2.5 GB" || bad "clone-edited: C: is not the size set"
+  [ "$(sfdisk --json "$T" | jq '.partitiontable.partitions[] | select(.node | endswith("p4")) | .size')" = $(( rz + 300 * 2048 )) ] \
+    && ok "clone-edited: WinRE grew by 300 MB" || bad "clone-edited: WinRE is not the size set"
+  [ "$(blkid -o value -s TYPE "$(part "$T" 5)")/$(blkid -o value -s LABEL "$(part "$T" 5)")" = ntfs/DATA ] \
+    && ok "clone-edited: new partition 5 is an empty NTFS named DATA" || bad "clone-edited: new partition 5 is not NTFS DATA"
+  src_same clone-edited
+fi
+
 if want clone-smaller; then
   say "clone-smaller: 4 GB -> 1.9 GB, shrink in scratch"
   T=$(fresh_target "$W/t2.img" 1900)
@@ -249,8 +277,13 @@ fi
 
 if want mbr; then
   say "mbr: old BIOS-style drive, 1 GB -> 2 GB"
+  # make_source writes sums-pN.txt over the GPT drive's: kept aside and put
+  # back, or browse (after this case) checked the GPT EFI against the MBR
+  # drive's sums and failed every full run (1.24)
+  for f in "$W"/sums-p*.txt; do cp "$f" "$f.gpt"; done
   MS=$(make_source "$W/mbr.img" 1000 dos | tail -1)
   mv "$W/sums-p2.txt" "$W/sums-mbr-c.txt"; mv "$W/sums-p1.txt" "$W/sums-mbr-sr.txt"
+  for f in "$W"/sums-p*.txt.gpt; do mv "$f" "${f%.gpt}"; done
   $ENG scan "${MS#/dev/}" > "$W/scanm.json"
   T=$(fresh_target "$W/t7.img" 2000)
   $ENG plan "$W/scanm.json" "${T#/dev/}" > "$W/planm.json"

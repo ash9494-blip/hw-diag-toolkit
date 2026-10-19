@@ -140,9 +140,9 @@ def limits(st, i):
     return out
 
 
-def _clamp(st, i, start, size):
+def _clamp(st, i, start, size, lim=None):
     e = st["after"][i]
-    lim = limits(st, i)
+    lim = lim or limits(st, i)
     a = _align(st)
     if not lim["can_move"]:
         start = e["start"]
@@ -165,8 +165,10 @@ def _push(st):
     return new
 
 
-def set_geometry(st, i, start, size):
-    start, size = _clamp(st, i, start, size)
+def set_geometry(st, i, start, size, lim=None):
+    """`lim`: limits from elsewhere - the clone plan's editor (imgplanedit.py)
+    has its own rules for what may go where, and the same snapping."""
+    start, size = _clamp(st, i, start, size, lim)
     e = st["after"][i]
     if (start, size) == (e["start"], e["size"]):
         return st

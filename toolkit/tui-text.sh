@@ -216,6 +216,8 @@ tui_bar() {
   tui_at "$row" $((TUI_PAD+1))
   printf '  %s%*s%s%*s%s %s%3d%%%s' "$BAR" "$fill" "" "$TRACK" "$rest" "" "$R" "$ACC" "$pct" "$R"
 }
+# The imaging bar moves only on the renderer; here it is the plain bar.
+tui_bar_live() { tui_bar "$1" "$2"; }
 
 # tui_kv <row> <label> <value> [colour]
 tui_kv() {
@@ -239,6 +241,27 @@ tui_para() {   # row text [tone] [width]
 
 # No dragging without the renderer: partitions.sh runs its menu version.
 tui_partedit() { PE_ANSWER=text; }
+tui_planedit() { PE_ANSWER=text; }
+
+# Drive lists: the text screen does not watch them while a menu is open (the
+# menu blocks on the keyboard), so a list is just a list here...
+tui_menu_watch() { shift; tui_menu "$@"; }
+# ...but the "plug the drive in" page does wait for one: /proc/partitions
+# changing, then two seconds for its partitions to be read. Q gives up.
+_blk_sig() { awk 'NR > 2 && $4 !~ /^(loop|ram|zram|nbd|dm-|sr|fd)/ {print $4, $3}' /proc/partitions; }
+tui_wait_device() {
+  local base k
+  base=$(_blk_sig)
+  while :; do
+    if [ -t 0 ]; then
+      IFS= read -rsn1 -t 1 k 2>/dev/null
+      case "$k" in q|Q|$'\e') return 1 ;; esac
+    else
+      sleep 1
+    fi
+    [ "$(_blk_sig)" != "$base" ] && { sleep 2; return 0; }
+  done
+}
 
 # The text interface has no bar: the caption, then the partitions in order.
 tui_diskmap() {

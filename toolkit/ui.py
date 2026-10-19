@@ -267,6 +267,19 @@ class Framebuffer:
             self.map.seek((y + r) * self.stride + x * bpp)
             self.map.write(data[r * rb:(r + 1) * rb])
 
+    def update_region(self, patch, x, y):
+        """A small part of the frame changes (the imaging bar's motion): kept
+        in `last` too, so the pointer's next move does not paint the old
+        picture back, and the pointer put back on top if it is over it."""
+        if self.last is not None:
+            self.last.paste(patch, (x, y))
+        self.blit_region(patch, x, y)
+        c = self.cursor
+        if c is not None and c.drawn:
+            b = c.drawn
+            if b[0] < x + patch.size[0] and x < b[2] and b[1] < y + patch.size[1] and y < b[3]:
+                c.paint()
+
     def close(self):
         try: self.map.close()
         except Exception: pass
@@ -360,6 +373,131 @@ class Cursor:
 
 def _in(box, xy):
     return bool(box) and box[0] <= xy[0] < box[2] and box[1] <= xy[1] < box[3]
+
+
+# ---------------------------------------------------------------- drives coming and going
+class BlockWatch:
+    """The machine's drives, for a list of them that has to follow a USB
+    drive plugged in or pulled out while it is on screen (Ash, 1.24: "detect
+    hot-plug USB, instead of back and select again"). /proc/partitions has
+    every disk and partition with its size, so a card or stick that only gets
+    a size once the kernel has read it counts too. Loop, RAM, NBD and dm
+    devices are the toolkit's own and come and go during a job. A change
+    counts once it has held still for SETTLE seconds: a stick's partitions
+    appear a moment after the stick itself."""
+    SETTLE = 1.5
+    SKIP = ("loop", "ram", "zram", "nbd", "dm-", "sr", "fd")
+
+    def __init__(self):
+        self.base = self.seen = self._sig()
+        self.since = 0.0
+
+    @classmethod
+    def _sig(cls):
+        try:
+            with open("/proc/partitions") as f:
+                rows = [ln.split() for ln in f.read().splitlines()[2:]]
+        except OSError:
+            return ()
+        return tuple(sorted((r[3], r[2]) for r in rows if len(r) == 4 and not r[3].startswith(cls.SKIP)))
+
+    def changed(self):
+        sig, now = self._sig(), time.time()
+        if sig == self.base:
+            self.seen = sig
+            return False
+        if sig != self.seen:
+            self.seen, self.since = sig, now
+            return False
+        return now - self.since >= self.SETTLE
+
+
+# ---------------------------------------------------------------- the imaging bar
+class BarLive:
+    """The motion in the imaging bar (Ash's pick of four samples, 1.24:
+    "Flow"). It follows the drives the job works on, not the percentage: a
+    shrink or a read-back runs for minutes without the figure moving, and a
+    bar that froze then would cry wolf. /sys/block/X/stat counts every sector
+    read and written; when none of the drives has moved one for STALL seconds
+    the bar stops and turns amber - a drive that has stopped answering looks
+    stopped. Only the bar's strip is redrawn, FPS times a second."""
+    FPS = 10
+    STALL = 10.0
+
+    def __init__(self, devs):
+        self.wanted = list(devs)
+        self.devs = [d for d in devs if re.match(r"^[A-Za-z0-9._-]+$", d)]
+        self.reset()
+
+    def reset(self):
+        now = time.time()
+        self.io, self.t_io, self.t_check, self.t = self._io(), now, now, now
+        self.phase, self.stalled = 0.0, False
+
+    def _io(self):
+        total, seen = 0, False
+        for d in self.devs:
+            try:
+                with open("/sys/block/%s/stat" % d) as f:
+                    v = f.read().split()
+                total += int(v[2]) + int(v[6])          # sectors read, sectors written
+                seen = True
+            except (OSError, ValueError, IndexError):
+                pass
+        return total if seen else None
+
+    def tick(self):
+        now = time.time()
+        if now - self.t_check >= 0.5:
+            self.t_check = now
+            io = self._io()
+            if io != self.io:
+                self.io, self.t_io = io, now
+        # nothing to watch (no drive named, or none readable): never "stalled"
+        self.stalled = self.io is not None and now - self.t_io >= self.STALL
+        if not self.stalled:
+            self.phase += min(0.5, now - self.t)
+        self.t = now
+
+
+def _mixc(a, b, t):
+    return tuple(int(x + (y - x) * t) for x, y in zip(a, b))
+
+
+def _round_mask(w, h):
+    m = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(m).rounded_rectangle([0, 0, w - 1, h - 1], h // 2, fill=255)
+    return m
+
+
+def _bar_body(d, left, y, w, h, pct, live=None):
+    """A progress bar without its % figure. With `live` it is the imaging
+    bar: packets run along the fill toward its edge - from the old drive to
+    the new one - while the drives are busy (BarLive)."""
+    d.rounded_rectangle([left, y, left + w, y + h], h // 2, fill=GROUND)
+    fw = int(w * max(0, min(100, pct)) / 100)
+    if fw <= h:
+        return
+    stalled = live is not None and live.stalled
+    # amber - except where amber is the accent itself (contrast): grey there
+    col = (WARN_ if WARN_ != ACCENT else MUTED) if stalled else ACCENT
+    if live is None or stalled:
+        d.rounded_rectangle([left, y, left + fw, y + h], h // 2, fill=col)
+        return
+    fill = Image.new("RGB", (fw, h), col)
+    fd = ImageDraw.Draw(fill)
+    # toward white, not PAPER: on dark and contrast PAPER is near black, and
+    # the packets came out darker than the fill they run along
+    light = _mixc(col, (255, 255, 255), 0.55)
+    per = h * 5
+    off = live.phase * per                    # one packet's spacing a second
+    for x0 in range(-per, fw + per, per):
+        x = x0 + off % per
+        # in from the left, out again before the tip
+        a = max(0.0, min(1.0, x / float(per))) * max(0.0, min(1.0, (fw - h - x) / float(per)))
+        if a > 0:
+            fd.rounded_rectangle([x, h * 0.32, x + h * 1.8, h * 0.68], h * 0.18, fill=_mixc(col, light, a))
+    d._image.paste(fill, (left, y), _round_mask(fw, h))
 
 
 # ---------------------------------------------------------------- wifi status
@@ -1333,6 +1471,7 @@ class Screen:
         self.menu_rows = []      # (index, box) of the menu rows drawn
         self._menu_first = 0     # first row of a scrolled menu's window
         self.choice_boxes = []   # (value, box) of the YES / NO pills
+        self.barlive = None      # the imaging bar's motion (BarLive), while one is shown
 
     # ---- primitives -------------------------------------------------
     def _card_box(self):
@@ -1362,6 +1501,33 @@ class Screen:
         Row 6 is the first content line, which sits below the screen title."""
         top = self.hdr + self.pad + (int(52 * self.s) if self.title else 0)
         return top + int((float(row) - 6) * self.rowh)
+
+    def bar_geom(self, row, left, right):
+        """A bar item's x, y, width and height; its % figure sits to the
+        right. The skins draw theirs in the same place, two pixels taller."""
+        s = self.s
+        return left, self.row_y(row) + int(6 * s), right - left - int(80 * s), int((16 if SKIN else 14) * s)
+
+    def live_bar(self):
+        return next((it for it in self.items if it[0] == "bar" and len(it) > 3 and it[3] is not None), None)
+
+    def paint_live_bar(self):
+        """One frame of the imaging bar's motion: only the bar's own strip is
+        drawn and written - a whole frame each time would cost the copy it
+        is showing. The background under a bar is the plain card."""
+        it = self.live_bar()
+        if it is None or self.mode != "card" or self.fb.last is None:
+            return
+        it[3].tick()
+        x0, _, x1, _ = self._card_box()
+        left, y, w, h = self.bar_geom(it[1], x0 + self.pad, x1 - self.pad)
+        strip = Image.new("RGB", (w + 1, h + 1), PAPER)
+        d = ImageDraw.Draw(strip)
+        if SKIN:
+            skins.bar_body(self, sys.modules[__name__], d, 0, 0, w, h, it[2], it[3])
+        else:
+            _bar_body(d, 0, 0, w, h, it[2], it[3])
+        self.fb.update_region(strip, left, y)
 
     # ---- frame ------------------------------------------------------
     # ---- header status ----------------------------------------------
@@ -1486,14 +1652,10 @@ class Screen:
                    self._clip(d, text, self.f_body, right - left),
                    font=self.f_body, fill=TONES.get(tone, INK), anchor="la")
         elif kind == "bar":
-            _, row, pct = it
-            y = self.row_y(row) + int(6 * self.s)
-            h = int(14 * self.s)
-            w = right - left - int(80 * self.s)
-            d.rounded_rectangle([left, y, left + w, y + h], h // 2, fill=GROUND)
-            fillw = int(w * max(0, min(100, pct)) / 100)
-            if fillw > h:
-                d.rounded_rectangle([left, y, left + fillw, y + h], h // 2, fill=ACCENT)
+            # row, pct and - on the imaging bar - its motion (BarLive)
+            pct = it[2]
+            bx, y, w, h = self.bar_geom(it[1], left, right)
+            _bar_body(d, bx, y, w, h, pct, it[3] if len(it) > 3 else None)
             d.text((right, y + h // 2), "%d%%" % pct, font=self.f_mono,
                    fill=MUTED, anchor="rm")
         elif kind == "badge":
@@ -1618,6 +1780,11 @@ class Screen:
             x0, x1 = int(x), int(x + w)
             if kind == "free":
                 d.rounded_rectangle([x0, top, x1, top + h], int(8 * s), fill=GROUND, outline=LINE)
+            elif kind == "new":
+                # a partition the plan makes empty after the copy (1.24) - as
+                # the partition editor draws one: hatched, accent edge
+                _pe_hatch(d._image, [x0, top, x1, top + h], _pe_mix(ACCENT, 0.7), int(10 * s))
+                d.rounded_rectangle([x0, top, x1, top + h], int(8 * s), outline=ACCENT, width=max(1, int(2 * s)))
             else:
                 col = g[self.DISK_KIND.get(kind, "INK")]
                 mix = lambda t: tuple(int(col[i] * (1 - t) + PAPER[i] * t) for i in range(3))
@@ -2161,10 +2328,12 @@ class Screen:
         c = kb.cursor
         return kb.click_xy if name == "click" else ((c.x, c.y) if c else (-1, -1))
 
-    def menu(self, kb, title, hint, entries, sel=0):
+    def menu(self, kb, title, hint, entries, sel=0, watch=None):
         """Returns the 1-based choice, 0 for back, or "wifi" when the header
         Wi-Fi icon was clicked (or W pressed) - tui.sh opens the Wi-Fi page and
-        then asks this menu again. `sel`: the row it opens on (0-based)."""
+        then asks this menu again. `sel`: the row it opens on (0-based).
+        `watch` (BlockWatch): a list of drives, answered "hotplug ROW" when
+        the drives change - the script lists them again and asks again."""
         sel = max(0, min(len(entries) - 1, sel))
         n = len(entries)
         self.title, self.hint = title, hint
@@ -2176,7 +2345,9 @@ class Screen:
                 self.items = [("menu", sel, entries)]
                 self.render()
             redraw = True
-            name, code = kb.poll(3600)
+            name, code = kb.poll(0.5 if watch else 3600)
+            if watch is not None and watch.changed():
+                return "hotplug %d" % sel
             if name is None: redraw = False
             elif name in ("up", "wheelup"):     sel = (sel - 1) % n
             elif name in ("down", "wheeldown"): sel = (sel + 1) % n
@@ -2200,6 +2371,18 @@ class Screen:
                 redraw = False
             else:
                 redraw = False
+
+    def wait_device(self, kb):
+        """Under the "plug the drive in" page the script drew: "hotplug" once
+        a drive comes or goes (BlockWatch), "q" for Q / Esc / right-click."""
+        watch = BlockWatch()
+        kb.drain()
+        while True:
+            name, _ = kb.poll(0.5)
+            if watch.changed():
+                return "hotplug"
+            if name in ("q", "esc", "back"):
+                return "q"
 
     def _grid_hit(self, n, xy):
         if (LOOK == "manual" or SKIN) and getattr(self, "grid_boxes", None):
@@ -3647,6 +3830,26 @@ class PartEditor:
         return bool(self.P.ops(self.st))          # apply
 
     # ---- drawing ---------------------------------------------------
+    def title_text(self):
+        disk = self.st["disk"]
+        return ("Partitions  -  /dev/%s  %s  %s" % (disk["name"], self.gb(disk["bytes"]),
+                                                    disk.get("model") or "")).strip()
+
+    def caption_now(self):
+        return "Now"
+
+    def caption_after(self):
+        return "After  -  drag an edge to resize, the middle to move"
+
+    def changes_caption(self, steps):
+        return ("Changes, in the order they will run - nothing is written until Apply" if steps
+                else "No changes yet - drag an edge, or choose a partition and use the buttons")
+
+    def apply_label(self, n):
+        # two whole strings, not change%s: an empty value matches no
+        # catalogue pattern, and other languages do plurals differently
+        return ("Apply 1 change" if n == 1 else "Apply %d changes" % n) if n else "Apply"
+
     def segs_now(self):
         doc = {"parts": self.st["now"], "bytes": self.st["disk"]["bytes"],
                "sector": self.sec, "label": self.st["disk"]["label"]}
@@ -3677,16 +3880,16 @@ class PartEditor:
         scr._draw_header(img, d)
         x0, y0, x1, y1 = scr._card(d)
         L, R = x0 + scr.pad, x1 - scr.pad
-        disk = self.st["disk"]
-        title = "Partitions  -  /dev/%s  %s  %s" % (disk["name"], self.gb(disk["bytes"]), disk.get("model") or "")
+        title = self.title_text()
         # row_y leaves room for a title only when the screen has one set
-        scr.title, scr.hint = title.strip(), self.HINT
-        d.text((L, y0 + scr.pad), scr._clip(d, title.strip(), scr.f_h, R - L), font=scr.f_h, fill=INK, anchor="la")
+        scr.title, scr.hint = title, self.HINT
+        d.text((L, y0 + scr.pad), scr._clip(d, title, scr.f_h, R - L), font=scr.f_h, fill=INK, anchor="la")
         y = scr.row_y(6)
-        d.text((L, y), "Now", font=scr.f_small, fill=MUTED, anchor="la")
+        d.text((L, y), scr._clip(d, self.caption_now(), scr.f_small, R - L), font=scr.f_small, fill=MUTED,
+               anchor="la")
         _pe_bar(scr, img, d, L, R, int(y + 26 * s), int(46 * s), self.segs_now())
         y2 = y + int(116 * s)
-        d.text((L, y2), "After  -  drag an edge to resize, the middle to move", font=scr.f_small,
+        d.text((L, y2), scr._clip(d, self.caption_after(), scr.f_small, R - L), font=scr.f_small,
                fill=MUTED, anchor="la")
         top, h = int(y2 + 52 * s), int(60 * s)
         boxes = _pe_bar(scr, img, d, L, R, top, h, self.segs_after())
@@ -3751,9 +3954,7 @@ class PartEditor:
     def draw_changes(self, d, L, R, y):
         scr, s = self.scr, self.scr.s
         steps = self.P.ops(self.st)
-        cap = ("Changes, in the order they will run - nothing is written until Apply" if steps
-               else "No changes yet - drag an edge, or choose a partition and use the buttons")
-        d.text((L, y), cap, font=scr.f_small, fill=MUTED, anchor="la")
+        d.text((L, y), self.changes_caption(steps), font=scr.f_small, fill=MUTED, anchor="la")
         for k, o in enumerate(steps[:4]):
             # the step translated before its number: "1.  Shrink C: ..." as a
             # whole matches no catalogue entry
@@ -3770,9 +3971,7 @@ class PartEditor:
         n = len(self.P.ops(self.st))
         for act, label in self.BUTTONS:
             if act == "apply":
-                # two whole strings, not change%s: an empty value matches no
-                # catalogue pattern, and other languages do plurals differently
-                label = ("Apply 1 change" if n == 1 else "Apply %d changes" % n) if n else "Apply"
+                label = self.apply_label(n)
             on = self.enabled(act)
             w = d.textlength(label, font=self.scr.f_bodyb) + 40 * s
             if act == "apply":
@@ -3939,6 +4138,74 @@ class PartEditor:
         return None, True
 
 
+class PlanEditor(PartEditor):
+    """The clone / restore plan's sizes, changed on the plan screen (Ash,
+    1.24: "when the system shows me the before and after clone size, I want
+    to adjust the partitions from there"). The partition editor he picked,
+    with the old drive (or the image) above and the new drive below: drag C:
+    bigger or smaller, grow the recovery partition, leave space free, make a
+    new partition in it. imgplanedit.py holds what may go where; nothing is
+    written here - "Use these sizes" goes back to the plan screen."""
+    BUTTONS = (("size", "Exact size"), ("new", "New"), ("delete", "Remove"),
+               ("undo", "Undo"), ("apply", "Use these sizes"))
+    HINT = ("Left/Right choose   [ ] size   Shift+Left/Right move   N new   D remove   "
+            "U undo   A use   Q back")
+
+    def __init__(self, scr, path):
+        import imgplanedit, imgplan, imgengine
+        self.P, self.E, self.gb = imgplanedit, imgengine, imgplan.gb
+        self.scr, self.path = scr, path
+        self.st = imgplanedit.load(path)
+        self.sec = self.st["disk"]["sector"]
+        self.sel = 0
+        self.drag = None
+        self.boxes, self.buttons, self.bar = [], [], (0, 1, 0, 0)
+        self.note = ""
+
+    def title_text(self):
+        return self.st.get("title") or "Sizes on the new drive"
+
+    def caption_now(self):
+        return self.st["src"].get("caption") or "Now"
+
+    def caption_after(self):
+        # the drive alone: an instruction glued on matches no catalogue entry,
+        # and the empty-state line below already says to drag an edge
+        return self.st["disk"].get("caption") or "New drive"
+
+    def changes_caption(self, steps):
+        return "On the new drive" if steps else "As planned - drag an edge, or choose a partition and use the buttons"
+
+    def apply_label(self, n):
+        return "Use these sizes"
+
+    def segs_now(self):
+        doc = {"parts": self.st["now"], "bytes": self.st["src"]["bytes"],
+               "sector": self.sec, "label": self.st["disk"]["label"]}
+        return self.scr._diskmap_segs(self.E.mapspec(doc))
+
+    def enabled(self, act):
+        cur = self.cur()
+        if act == "delete":
+            return cur is not None and cur[0] == "part" and bool(self.st["after"][cur[1]].get("new"))
+        if act == "apply":
+            return True
+        return PartEditor.enabled(self, act)
+
+    def action(self, act):
+        if act == "delete" and not self.enabled(act):
+            self.note = "Every partition of the old drive is copied - only a new one can be removed."
+            return None, True
+        if act == "format":                      # no Format here: a copy is about to fill it
+            return None, False
+        return PartEditor.action(self, act)
+
+    def handle(self, kb, name):
+        if name == "f":
+            return None, False
+        return PartEditor.handle(self, kb, name)
+
+
 def _kb_events(kb, timeout):
     """Raw (code, value) pairs - the keyboard test needs releases too."""
     out = []
@@ -4042,6 +4309,21 @@ def main():
             live_end()
             return False
 
+    # The imaging bar's motion (BarLive): when its frame was last drawn, and
+    # whether it broke - then the bar stays still for the rest of the session,
+    # a broken animation must never cost the job's screen.
+    bar = {"t": 0.0, "off": False}
+
+    def bar_frame():
+        try:
+            scr.paint_live_bar()
+        except Exception as exc:
+            import traceback
+            sys.stderr.write("ui: bar frame FAILED: %s\n%s\n" % (exc, traceback.format_exc()))
+            bar["off"] = True
+            scr.barlive = None
+            scr.items = [i[:3] if i[0] == "bar" else i for i in scr.items]
+
     cmd_fd = os.open(CMD, os.O_RDONLY)
     buf = b""
     dirty = False
@@ -4077,14 +4359,14 @@ def main():
                 # A question or a result ends a live animation: the operator
                 # must see the screen that asks, not the drive picture.
                 if live["anim"] is not None and op in (
-                        "anykey", "menu", "menuat", "gridmenu", "confirm", "input", "msg", "pager",
-                        "kbtest", "ptrtest", "camtest", "tstest", "pixtest", "anim", "partedit"):
+                        "anykey", "menu", "menuat", "menuw", "waitdev", "gridmenu", "confirm", "input", "msg",
+                        "pager", "kbtest", "ptrtest", "camtest", "tstest", "pixtest", "anim", "partedit"):
                     live_end(); dirty = True
                 # A blocking command must not sit on the keyboard while the
                 # screen still shows the previous frame.
-                if dirty and live["anim"] is None and op in ("waitkey", "anykey", "menu", "menuat", "confirm",
-                                    "input", "msg", "pager", "kbtest", "gridmenu", "ptrtest", "camtest", "tstest",
-                                    "pixtest", "anim"):
+                if dirty and live["anim"] is None and op in ("waitkey", "anykey", "menu", "menuat", "menuw",
+                                    "waitdev", "confirm", "input", "msg", "pager", "kbtest", "gridmenu", "ptrtest",
+                                    "camtest", "tstest", "pixtest", "anim"):
                     scr.render(); dirty = False
                 try:
                     if op == "frame":
@@ -4092,6 +4374,9 @@ def main():
                         scr.hint  = parts[2] if len(parts) > 2 else ""
                         scr.items = []; dirty = True
                         building = time.time()
+                        # a new job's bar starts unstalled, whatever the last one saw
+                        if scr.barlive is not None:
+                            scr.barlive.reset()
                     elif op == "sub":
                         scr.sub = "\n".join(p for p in parts[1:3] if p.strip())
                         dirty = True
@@ -4119,8 +4404,18 @@ def main():
                             row += 1
                         reply(row); dirty = True
                     elif op == "bar":
+                        # row, pct - then, for the imaging bar (tui_bar_live),
+                        # "live" and the drives the job works on (BarLive). The
+                        # same drives keep the same motion: the bar is sent
+                        # again every second and must not restart each time.
+                        lv = None
+                        if len(parts) > 3 and parts[3] == "live" and not bar["off"]:
+                            devs = [p for p in parts[4:] if p]
+                            lv = scr.barlive if scr.barlive is not None and scr.barlive.wanted == devs \
+                                else BarLive(devs)
+                        scr.barlive = lv
                         scr.items = [i for i in scr.items if i[0] != "bar"]
-                        scr.items.append(("bar", parts[1], int(float(parts[2])))); dirty = True
+                        scr.items.append(("bar", parts[1], int(float(parts[2])), lv)); dirty = True
                     elif op == "badge":
                         scr.items.append(("badge", parts[1], parts[2],
                                           parts[3] if len(parts) > 3 else "")); dirty = True
@@ -4189,6 +4484,19 @@ def main():
                             entries.append((name.strip(), desc.strip()))
                         at = int(parts[1]) - 1 if parts[1].isdigit() else 0
                         reply(scr.menu(kb, parts[2], parts[3], entries, sel=at)); dirty = False
+                    elif op == "menuw":
+                        # tui_menu_watch: as menuat, for a list of drives - it
+                        # answers "hotplug ROW" when one is plugged in or pulled
+                        entries = []
+                        for e in parts[4:]:
+                            name, _, desc = e.partition("|")
+                            entries.append((name.strip(), desc.strip()))
+                        at = int(parts[1]) - 1 if parts[1].isdigit() else 0
+                        reply(scr.menu(kb, parts[2], parts[3], entries, sel=at, watch=BlockWatch()))
+                        dirty = False
+                    elif op == "waitdev":
+                        # tui_wait_device: under the "plug the drive in" page
+                        reply(scr.wait_device(kb)); dirty = False
                     elif op == "gridmenu":
                         entries = []
                         for e in parts[3:]:
@@ -4216,14 +4524,21 @@ def main():
                         # to poll at all, so Q could not stop the tests that
                         # check between long steps (install simulation,
                         # benchmark passes, the heavy controller slices).
-                        # A live animation keeps playing while it waits.
+                        # A live animation keeps playing while it waits, and
+                        # so does the imaging bar (run_job waits here).
                         end = time.time() + float(parts[1])
                         name = None
                         while True:
                             if live["anim"] is not None and not live_paint():
                                 dirty = True; scr.render(); dirty = False
                             left = end - time.time()
-                            step = min(left, live_period()) if live["anim"] is not None else left
+                            if live["anim"] is not None:
+                                step = min(left, live_period())
+                            elif scr.live_bar() is not None:
+                                bar_frame()
+                                step = min(left, 1.0 / BarLive.FPS)
+                            else:
+                                step = left
                             name, _ = kb.poll(max(0.01, step))
                             if name is not None and name not in Keyboard.POINTER_EVENTS:
                                 break
@@ -4243,14 +4558,16 @@ def main():
                     elif op == "pixtest":
                         reply(fullscreen(pixel_test, scr, kb)); dirty = True
                     elif op == "partedit":
-                        # The partition editor (partitions.sh). Not fullscreen():
-                        # it is dragged with the pointer, so the pointer stays.
-                        # Its own mode keeps the header clock from repainting
-                        # the card underneath it.
+                        # The partition editor (partitions.sh), or with "plan"
+                        # the clone / restore plan's sizes (imaging.sh, 1.24).
+                        # Not fullscreen(): it is dragged with the pointer, so
+                        # the pointer stays. Its own mode keeps the header
+                        # clock from repainting the card underneath it.
                         scr.mode = "edit"
                         kb.drag_mode = True
                         try:
-                            reply(PartEditor(scr, parts[1]).run(kb))
+                            ed = PlanEditor if len(parts) > 2 and parts[2] == "plan" else PartEditor
+                            reply(ed(scr, parts[1]).run(kb))
                         finally:
                             kb.drag_mode = kb.held = False
                             scr.mode = "card"
@@ -4273,7 +4590,7 @@ def main():
                     sys.stderr.write("ui: %s FAILED: %s\n%s\n"
                                      % (op, exc, traceback.format_exc()))
                     sys.stderr.flush()
-                    if op in ("menu", "menuat", "confirm", "input", "msg", "anykey",
+                    if op in ("menu", "menuat", "menuw", "waitdev", "confirm", "input", "msg", "anykey",
                               "pager", "waitkey", "kbtest", "gridmenu", "ptrtest", "camtest", "tstest",
                               "pixtest", "ptrprobe", "anim", "partedit"):
                         reply("")
@@ -4286,6 +4603,9 @@ def main():
                 scr.render(); dirty = False; last_paint = now; building = None
             elif not dirty and building is None:
                 scr.tick()           # the header clock, between script frames
+                if now - bar["t"] >= 1.0 / BarLive.FPS:
+                    bar["t"] = now
+                    bar_frame()
     finally:
         cleanup()
 

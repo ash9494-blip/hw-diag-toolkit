@@ -82,27 +82,80 @@ offer_fix() {   # disk plan -> 0 when the drive was changed (scan and plan again
 }
 
 # ---------------------------------------------------------------- the plan
-# Both drives as Macrium draws them, then the table. Only looked at: the
-# go-ahead is confirm_erase, which defaults to NO.
+# Both drives as Macrium draws them, then the table. The go-ahead is
+# confirm_erase, which defaults to NO; E opens the sizes in the editor.
 show_plan() {   # plan title old-caption new-caption
-  local plan=$1 row=13 num name fs old new how change shown=0 l
-  tui_frame "$2" "Enter = next"
-  tui_diskmap 6 "$3" "$($ENG mapspec "$plan" old)"
-  tui_diskmap 9 "$4" "$($ENG mapspec "$plan" new)"
-  tui_thead 12 "Partition" "Now" "After" "Copied as" "Change"
-  while IFS='|' read -r num name fs old new how change; do
-    [ $shown -ge 6 ] && break
-    [ "$fs" = - ] || name="$name ($fs)"
-    tui_trow $row "$name" "$old" "$new" "$how" "$change"
-    row=$((row+1)); shown=$((shown+1))
-  done < <($ENG rows "$plan")
-  row=$((row+1))
-  while IFS= read -r l; do
-    [ $row -gt 22 ] && break
-    row=$(tui_para $row "$l" muted 100)
-  done < <(jq -r '.notes[]' "$plan")
-  tui_flush
-  tui_anykey
+  local plan=$1 row num name fs old new how change shown l
+  while :; do
+    row=13; shown=0
+    tui_frame "$2" "Enter = next   E = adjust sizes"
+    tui_diskmap 6 "$3" "$($ENG mapspec "$plan" old)"
+    tui_diskmap 9 "$4" "$($ENG mapspec "$plan" new)"
+    tui_thead 12 "Partition" "Now" "After" "Copied as" "Change"
+    while IFS='|' read -r num name fs old new how change; do
+      [ $shown -ge 6 ] && break
+      [ "$fs" = - ] || name="$name ($fs)"
+      tui_trow $row "$name" "$old" "$new" "$how" "$change"
+      row=$((row+1)); shown=$((shown+1))
+    done < <($ENG rows "$plan")
+    row=$((row+1))
+    while IFS= read -r l; do
+      [ $row -gt 22 ] && break
+      row=$(tui_para $row "$l" muted 100)
+    done < <(jq -r '.notes[]' "$plan")
+    tui_flush
+    tui_keys e
+    [ "$TUI_KEY" = e ] || return 0
+    adjust_plan "$plan" "$3" "$4"
+  done
+}
+
+# The sizes on the new drive, changed by hand (Ash, 1.24: "when the system
+# shows me the before and after clone size, I want to adjust the partitions
+# from there"): the plan in the partition editor he picked (ui.py
+# PlanEditor, imgplanedit.py). The plan is replaced only by one that
+# imgplanedit.py has checked again; Q leaves it as it was.
+PX="python3 /opt/diag/imgplanedit.py"
+adjust_plan() {   # plan old-caption new-caption
+  local plan=$1 e
+  local -a why
+  PE=$PX; STATE=$W/planedit.json
+  if ! $PX open "$plan" "$STATE" "$2" "$3" "Sizes on the new drive" 2>>"$W/engine.out"; then
+    tui_msg "Cannot open the sizes" "$(tail -1 "$W/engine.out" | cut -c1-90)"
+    return
+  fi
+  e=$($PX problems "$STATE" | sed -n 's/^E|//p' | head -1)
+  if [ -n "$e" ]; then say_wrapped "The sizes cannot be changed" "$e"; return; fi
+  while :; do
+    tui_planedit "$STATE"
+    [ "$PE_ANSWER" = text ] && text_editor "Sizes on the new drive" "Use these sizes" "back to the plan"
+    case "$PE_ANSWER" in
+      apply)
+        if $PX done "$STATE" "$W/plan.edit.json" > "$W/planedit.err" 2>&1; then
+          mv -f "$W/plan.edit.json" "$plan"
+          return
+        fi
+        mapfile -t why < "$W/planedit.err"
+        say_wrapped "These sizes cannot be used" "${why[@]}" ;;
+      new\|*)  new_partition "${PE_ANSWER#new|}" ;;
+      size\|*) exact_size "${PE_ANSWER#size|}" ;;
+      menu\|*) plan_part_menu "${PE_ANSWER#menu|}" ;;
+      *)
+        [ "$(jq '.history | length' "$STATE")" = 0 ] && return
+        tui_confirm "Leave without using these sizes?" no "The plan keeps the sizes it had." "" "Leave?" && return ;;
+    esac
+  done
+}
+
+plan_part_menu() {   # index - Enter on a partition in the sizes editor
+  info "$1"
+  if [ "$INFO_NEW" != 1 ]; then exact_size "$1"; return; fi
+  tui_menu "$INFO_NAME" "$INFO_FS, $(gbytes "$INFO_SIZE") - made empty after the copy" \
+    "Exact size|type the size in GB" "Remove|it is not made" "Back|to the drive" || return
+  case "$TUI_CHOICE" in
+    1) exact_size "$1" ;;
+    2) $PE delete "$STATE" "$1" ;;
+  esac
 }
 
 refused() {   # plan
@@ -197,6 +250,7 @@ report_plan() {   # plan
   while IFS='|' read -r num name fs old new how change; do
     rsilent "$(printf '  %-3s %-26s %-6s %10s -> %-10s %-14s %s' "$num" "$name" "$fs" "$old" "$new" "$how" "$change")"
   done < <($ENG rows "$1")
+  [ "$(jq -r '.edited // false' "$1")" = true ] && rsilent "  Sizes set by hand on the plan screen."
   jq -r '.notes[]' "$1" | sed 's/^/  Note: /' >> "$REPORT_TXT"
 }
 
@@ -267,7 +321,7 @@ clone_flow() {
   rsilent "From : $(drive_desc "$src")"
   rsilent "To   : $(drive_desc "$tgt")"
   report_plan "$W/plan.json"
-  JOB_FROM=$(drive_desc "$src"); JOB_TO=$(drive_desc "$tgt")
+  JOB_FROM=$(drive_desc "$src"); JOB_TO=$(drive_desc "$tgt"); JOB_DEVS="$src $tgt"
   run_job "Cloning /dev/$src to /dev/$tgt" \
     "The new drive is left half-copied - clone it again before using it." \
     clone "$W/plan.json" "${SCRATCH_OPT[@]}"
@@ -309,6 +363,7 @@ backup_flow() {
   rsilent "Drive  : $(drive_desc "$src")"
   rsilent "Image  : $name on $STORE_DESC"
   JOB_FROM=$(drive_desc "$src"); JOB_TO="$name on $STORE_DESC"
+  JOB_DEVS="$src $(store_parent "$STORAGE_DEV")"
   run_job "Backing up /dev/$src" "The image folder is left incomplete - delete it." \
     backup "$W/scan-$src.json" "$dir" --machine "$(dmi system-manufacturer) $(dmi system-product-name), S/N $(dmi system-serial-number)" "${split[@]}"
   $ENG bl-close >/dev/null 2>&1
@@ -369,7 +424,7 @@ macrium_restore() {   # store-disk
   rsilent "Image : ${IMAGE##*/} on $STORE_DESC"
   rsilent "To    : $(drive_desc "$tgt")"
   report_plan "$W/plan.json"
-  JOB_FROM="${IMAGE##*/} on $STORE_DESC"; JOB_TO=$(drive_desc "$tgt")
+  JOB_FROM="${IMAGE##*/} on $STORE_DESC"; JOB_TO=$(drive_desc "$tgt"); JOB_DEVS="$tgt $sdisk"
   run_job "Restoring to /dev/$tgt" "The drive is left half-written - restore it again before using it." \
     clone "$W/plan.json" "${SCRATCH_OPT[@]}"
   scratch_done; mr_detach
@@ -399,7 +454,7 @@ restore_flow() {
   rsilent "Image : ${IMAGE##*/} on $STORE_DESC"
   rsilent "To    : $(drive_desc "$tgt")"
   report_plan "$W/plan.json"
-  JOB_FROM="${IMAGE##*/} on $STORE_DESC"; JOB_TO=$(drive_desc "$tgt")
+  JOB_FROM="${IMAGE##*/} on $STORE_DESC"; JOB_TO=$(drive_desc "$tgt"); JOB_DEVS="$tgt $sdisk"
   run_job "Restoring to /dev/$tgt" "The drive is left half-written - restore it again before using it." \
     restore "$IMAGE" "$W/plan.json" "${SCRATCH_OPT[@]}"
   scratch_done; umount_storage
@@ -413,7 +468,7 @@ verify_flow() {
   store_mount ro || return
   pick_image || { umount_storage; return; }
   rsection "IMAGE CHECK -- ${IMAGE##*/}"
-  JOB_FROM="${IMAGE##*/} on $STORE_DESC"; JOB_TO=""
+  JOB_FROM="${IMAGE##*/} on $STORE_DESC"; JOB_TO=""; JOB_DEVS=$(store_parent "$STORAGE_DEV")
   local prog=""
   [ -f "$IMAGE" ] && prog="python3 /opt/diag/mrimg.py"     # a Macrium image: its own checksums
   JOB_PROG=$prog run_job "Checking ${IMAGE##*/}" "Only the check stops - the image is not changed." \

@@ -72,6 +72,10 @@ tui_frame() { _s frame "$1" "$2"; [ -n "$TUI_SUB" ] && _send_sub "$TUI_SUB"; ret
 tui_kv()    { _s kv "$1" "$2" "$3" "${4:-}"; }
 tui_line()  { _s line "$1" "$2" "${3:-}"; }
 tui_bar()   { _s bar "$1" "$2"; }
+# The imaging job's bar (1.24): row, pct, then the drives the job reads and
+# writes (sda nvme0n1 ...). It moves while they are busy and goes amber and
+# still when none of them has done anything for 10 seconds (ui.py BarLive).
+tui_bar_live() { _s bar "$1" "$2" live "${@:3}"; }
 tui_badge() { _s badge "$1" "$2" "${3:-}"; }
 tui_thead() { local r=$1; shift; _s thead "$r" "$@"; }
 tui_trow()  { local r=$1; shift; _s trow  "$r" "$@"; }
@@ -82,6 +86,9 @@ tui_diskmap() { _s diskmap "$1" "$2" "$3"; }
 # The partition editor (ui.py PartEditor) on a state file from imgparted.py.
 # PE_ANSWER: back, apply, new|gap, format|i, size|i, menu|i.
 tui_partedit() { _ask partedit "$1"; PE_ANSWER=$UI_ANS; }
+# The same editor on a clone / restore plan's sizes (imgplanedit.py state).
+# PE_ANSWER: back, apply (= use these sizes), new|gap, size|i, menu|i.
+tui_planedit() { _ask partedit "$1" plan; PE_ANSWER=$UI_ANS; }
 
 # Change a renderer setting (theme, textscale) for the rest of the session.
 tui_setting() { _s setting "$1" "$2"; }
@@ -122,6 +129,27 @@ tui_menu_at() {
   TUI_CHOICE=$UI_ANS
   return 0
 }
+
+# A list of drives that follows a drive plugged in or pulled out while it is
+# open (Ash, 1.24: no going back and choosing again to see a new USB drive).
+# As tui_menu_at, plus return 2 when the drives changed: TUI_HOTSEL is the
+# row that was highlighted (1-based) - list the drives again and ask again.
+tui_menu_watch() {
+  local at=$1 title=$2 hint=$3; shift 3
+  while :; do
+    _ask menuw "$at" "$title" "$hint" "$@"
+    [ "$UI_ANS" = wifi ] || break
+    _wifi_shortcut
+  done
+  case "$UI_ANS" in hotplug*) TUI_HOTSEL=$(( ${UI_ANS#hotplug } + 1 )); return 2 ;; esac
+  case "$UI_ANS" in ''|0|*[!0-9]*) return 1 ;; esac
+  TUI_CHOICE=$UI_ANS
+  return 0
+}
+
+# Under a "plug the drive in" page the caller drew: 0 once a drive comes or
+# goes, 1 when the operator gives up (Q / Esc).
+tui_wait_device() { _ask waitdev; [ "$UI_ANS" = hotplug ]; }
 
 # Same contract as tui_menu, but each entry is "Label|icon" and it is drawn as a
 # grid of square tiles. The text interface falls back to the list.

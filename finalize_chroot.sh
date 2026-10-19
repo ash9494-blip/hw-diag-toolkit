@@ -294,6 +294,9 @@ mkdir -p $C/tmp/test; mv $C/tmp/imgplan_test.py $C/tmp/test/
 # and the partition editor's model (imgparted.py): what may be dragged where,
 # and the order Apply runs the steps in
 cp $B/test/imgparted_test.py $C/tmp/test/
+# and the plan screen's sizes editor (imgplanedit.py): an edited plan is what
+# a clone then writes, so one that slips past its checks must never ship
+cp $B/test/imgplanedit_test.py $C/tmp/test/
 # and Browse an image's reader: any byte of a partition out of a partclone
 # image in zstd frames (imgbrowse.py) - a wrong offset would show wrong files
 cp $B/test/imgbrowse_test.py $C/tmp/test/
@@ -308,7 +311,7 @@ gcc -O2 -shared -fPIC -DCOMPRESSION_LEVEL=2 -Dmemory_safe \
   || { echo "BUILD ABORTED - libqlz.so did not build (gcc: setup-host.sh installs it)" >&2; exit 1; }
 cp $B/test/mrimg_test.py $C/tmp/test/
 ln -sfn /opt/diag $C/tmp/toolkit
-for t in imgplan imgparted imgbrowse mrimg; do
+for t in imgplan imgparted imgplanedit imgbrowse mrimg; do
   if ! chroot $C python3 /tmp/test/${t}_test.py > /tmp/$t.out 2>&1; then
     echo "BUILD ABORTED - $t.py failed its tests:" >&2
     tail -15 /tmp/$t.out >&2

@@ -398,6 +398,18 @@ def describe(q):
     return "%s (%s)" % (name, q.get("fs") or "raw")
 
 
+def make_new(job, q, dst):
+    """A partition added on the plan screen (imgplanedit.py, 1.24): made
+    empty, after the copies - the plan lists it last. The partition editor's
+    own mkfs, so a D: made here is the same as one made in Partitions."""
+    import imgparted
+    job.step("Making %s" % describe(q), weight(q))
+    job.set(phase="format", msg="Formatting %s" % describe(q))
+    sh(["wipefs", "-a", "-f", dst], check=False)
+    imgparted._mkfs(dst, q["fs"], q.get("label"), q["nstart"])
+    job.finish_step()
+
+
 def clone(job, plan, scratch=None, source_shrink=False):
     check_target(plan)
     sec = plan["sector"]
@@ -410,6 +422,9 @@ def clone(job, plan, scratch=None, source_shrink=False):
     copy_boot_area("/dev/" + plan["source"], "/dev/" + plan["target"], plan)
     for q in parts:
         dst = node_of(plan["target"], q["num"])
+        if q["how"] == "new":
+            make_new(job, q, dst)
+            continue
         src = q.get("mapper") or q["node"]
         job.step("Copying %s" % describe(q), weight(q))
         job.set(phase="copy")
@@ -621,6 +636,9 @@ def restore(job, imgdir, plan, scratch=None):
                    mbr_file=base + "-mbr" if os.path.exists(base + "-mbr") else None,
                    gap_file=gap if os.path.exists(gap) else None)
     for q in parts:
+        if q["how"] == "new":
+            make_new(job, q, node_of(plan["target"], q["num"]))
+            continue
         job.step("Restoring %s" % describe(q), weight(q))
         job.set(phase="copy")
         restore_part(job, q, node_of(plan["target"], q["num"]), plan["sector"], scratch)
@@ -711,11 +729,14 @@ EFI_T = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
 MSR_T = "e3c9e316-0b5c-4db8-817d-f92df00215ae"
 WINRE_T = "de94bba4-06d1-4d40-a16a-bfd50179d6ac"
 SEG_NAMES = {"efi": "EFI", "msr": "MSR", "rec": "Recovery", "locked": "BitLocker"}
+NEW_FS = {"ntfs": "NTFS", "exfat": "exFAT", "vfat": "FAT32", "ext4": "ext4"}   # imgparted.FS_NAMES
 
 
 def seg_kind(q, system):
     t = str(q.get("type", "")).lower()
     label = (q.get("label") or q.get("name") or "").lower()
+    if q.get("how") == "new":
+        return "new"
     if q.get("state") == "locked":
         return "locked"
     if t in (EFI_T, "ef"):
@@ -732,6 +753,8 @@ def seg_kind(q, system):
 def seg_name(q, kind):
     if kind == "sys":
         name = "C:" + (" " + q["label"] if q.get("label") else "")
+    elif kind == "new":
+        name = "new " + (q.get("label") or NEW_FS.get(q.get("fs"), q.get("fs") or ""))
     else:
         name = SEG_NAMES.get(kind) or q.get("label") or q.get("fs") or "partition %d" % q["num"]
     return name.replace("|", "/").replace(";", ",")
@@ -742,8 +765,9 @@ def seg_label(q, kind, nbytes):
 
 
 def system_part(doc):
+    # never a partition the plan screen added: a big new D: is not C:
     parts = [q for q in doc["parts"]
-             if q.get("how") != "skip" and not imgplan._is_extended(doc.get("label", ""), q)]
+             if q.get("how") not in ("skip", "new") and not imgplan._is_extended(doc.get("label", ""), q)]
     return max(parts, key=lambda q: q["size"]) if parts else None
 
 
@@ -753,12 +777,14 @@ def mapspec(doc, new=False):
     `doc` is a scan, or a plan drawn as it is now (old) or will be (new)."""
     sec = doc.get("sector") or 512
     label = doc.get("label", "")
+    # a partition the plan screen added is only on the new drive
     parts = [q for q in doc["parts"]
-             if q.get("how") != "skip" and not imgplan._is_extended(label, q)]
+             if q.get("how") != "skip" and not imgplan._is_extended(label, q)
+             and (new or q.get("how") != "new")]
     total = doc["target_bytes"] if new else (doc.get("source_bytes") or doc.get("bytes") or 0)
     k0, k1 = ("nstart", "nsize") if new else ("start", "size")
     parts.sort(key=lambda q: q[k0])
-    system = max(parts, key=lambda q: q["size"]) if parts else None
+    system = system_part({"parts": parts, "label": label})
     floor = max(total // 100, 64 * MiB)
     segs, pos = [], 0
     for q in parts:
@@ -788,12 +814,14 @@ def rows(plan):
         change = "grows" if q.get("grow") else "shrinks" if q.get("shrink") else \
             "moves" if q.get("nstart", q["start"]) != q["start"] else ""
         how = {"fs": "used data", "raw": "every sector", "swap": "recreated",
-               "skip": "-"}.get(q["how"], q["how"])
+               "skip": "-", "new": "made empty"}.get(q["how"], q["how"])
         if q.get("missing"):
             how = "not in the image"
+        if q["how"] == "new":
+            change = "new"
         out.append("|".join(str(x) for x in (
             q["num"], seg_name(q, seg_kind(q, system)),
-            q.get("fs") or "-", imgplan.gb(q["size"] * sec),
+            q.get("fs") or "-", "-" if q["how"] == "new" else imgplan.gb(q["size"] * sec),
             imgplan.gb(q.get("nsize", q["size"]) * sec), how, change)))
     return out
 
