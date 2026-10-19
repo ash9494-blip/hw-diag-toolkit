@@ -111,7 +111,7 @@ full_run() {
   [ -z "$disk" ] && diskline="Disk benchmark                                  skipped, no drive found"
 
   tui_confirm "Full diagnostic run" yes \
-    "1.  System info, drivers, battery, SMART        about 1 min" \
+    "1.  System info, drivers, GPU, battery, SMART   about 1 min" \
     "2.  $diskline" \
     "3.  CPU stress and temperature log              about 10 min" \
     "4.  RAM stress test                             about 5 min" \
@@ -123,6 +123,7 @@ full_run() {
 
   /opt/diag/sysinfo.sh --quiet
   /opt/diag/drivercheck.sh --quiet
+  /opt/diag/gputest.sh --quiet
 
   if [ -n "$disk" ]; then
     /opt/diag/disktest.sh auto "$disk" 1G 1
@@ -305,6 +306,8 @@ run_test() {   # one dispatcher, so both layouts stay in step
     camera)   /opt/diag/cameratest.sh ;;
     sdcard)   /opt/diag/sdtest.sh ;;
     lid)      /opt/diag/lidtest.sh ;;
+    gpu)      /opt/diag/gputest.sh ;;
+    fan)      /opt/diag/fantest.sh ;;
     errlog)   /opt/diag/errlog.sh ;;
     network)  /opt/diag/nettest.sh ;;
     system)   /opt/diag/sysinfo.sh ;;
@@ -320,7 +323,7 @@ run_test() {   # one dispatcher, so both layouts stay in step
 
 # New tiles go at the end: the numbers already in Ash's hands stay put.
 peripherals_menu() {
-  local acts=(all screen touchpad touchscreen sound usb charging camera network wireless drivers sdcard lid)
+  local acts=(all screen touchpad touchscreen sound usb charging camera network wireless drivers sdcard lid fan)
   while :; do
     tui_grid "Peripherals" "arrows to move, Enter to select      Q = back" \
       "Run them all|grid" \
@@ -335,10 +338,11 @@ peripherals_menu() {
       "Wireless test|wifi|$(test_result WIFI_RESULT)" \
       "Driver check|download|$(test_result DRIVER_RESULT)" \
       "SD card|sdcard|$(test_result SD_RESULT)" \
-      "Lid sensor|lid|$(test_result LID_RESULT)" || return
+      "Lid sensor|lid|$(test_result LID_RESULT)" \
+      "Fan|fan|$(test_result FAN_RESULT)" || return
     if [ "${acts[$((TUI_CHOICE-1))]}" = all ]; then
       local t
-      for t in screen touchpad touchscreen sound usb charging camera network wireless sdcard lid; do run_test "$t"; done
+      for t in screen touchpad touchscreen sound usb charging camera network wireless sdcard lid fan; do run_test "$t"; done
     else
       run_test "${acts[$((TUI_CHOICE-1))]}"
     fi
@@ -346,13 +350,15 @@ peripherals_menu() {
 }
 
 compact_menu() {
-  # Disk imaging sits beside Keyboard as tile 7 (Ash, 1.22) - it was last, 18
-  local acts=(fullrun disk cpu ram battery keyboard imaging peripherals showall wificonnect drivers dmi results save shell system settings errlog)
+  # GPU beside CPU and RAM as tile 5 (Ash, 1.24); Disk imaging beside Keyboard
+  # (1.22) - it was last, 18
+  local acts=(fullrun disk cpu ram gpu battery keyboard imaging peripherals showall wificonnect drivers dmi results save shell system settings errlog)
   tui_grid "Choose a test" "arrows or its number (two digits for 10+), Enter to select      Q = power menu" \
     "Full run|play" \
     "HDD / SSD|disk|$(test_result DISK_RESULT DISK_CTRL DISK_SELFTEST DISK_SMART)" \
     "CPU|cpu|$(test_result CPU_RESULT)" \
     "RAM|ram|$(test_result RAM_RESULT)" \
+    "GPU|gpu|$(test_result GPU_RESULT)" \
     "Battery|battery|$(test_result BATTERY_RESULT)" \
     "Keyboard|keyboard|$(test_result KEYBOARD_RESULT)" \
     "Disk imaging|clone|$(test_result IMAGING_RESULT)" \
@@ -368,11 +374,12 @@ compact_menu() {
 }
 
 expanded_menu() {
-  local acts=(fullrun disk cpu ram battery keyboard imaging screen touchpad touchscreen sound usb charging camera sdcard lid network wificonnect wireless drivers errlog dmi results save shell system settings)
+  local acts=(fullrun disk cpu ram gpu battery keyboard imaging screen touchpad touchscreen sound usb charging camera sdcard lid fan network wificonnect wireless drivers errlog dmi results save shell system settings)
   tui_grid "Every test" "arrows or its number, Enter to select      Q = back to the short list" \
     "Full run|play" \
     "HDD / SSD|disk|$(test_result DISK_RESULT DISK_CTRL DISK_SELFTEST DISK_SMART)" \
     "CPU|cpu|$(test_result CPU_RESULT)" "RAM|ram|$(test_result RAM_RESULT)" \
+    "GPU|gpu|$(test_result GPU_RESULT)" \
     "Battery|battery|$(test_result BATTERY_RESULT)" \
     "Keyboard|keyboard|$(test_result KEYBOARD_RESULT)" \
     "Disk imaging|clone|$(test_result IMAGING_RESULT)" \
@@ -383,6 +390,7 @@ expanded_menu() {
     "USB ports|usb|$(test_result USB_RESULT)" "Charging|charge|$(test_result CHARGE_RESULT)" \
     "Camera|camera|$(test_result CAMERA_RESULT)" \
     "SD card|sdcard|$(test_result SD_RESULT)" "Lid sensor|lid|$(test_result LID_RESULT)" \
+    "Fan|fan|$(test_result FAN_RESULT)" \
     "Ethernet Network|network|$(test_result ETHERNET_RESULT)" "Wi-Fi|wifi" \
     "Wireless test|wifi|$(test_result WIFI_RESULT)" \
     "Driver check|download|$(test_result DRIVER_RESULT)" \

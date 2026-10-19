@@ -143,6 +143,8 @@ SH_DEFAULT = re.compile(r"\$\{[A-Za-z_]\w*:?[-+]((?:[^{}]|\$\{[^{}]*\})*)\}")
 # as a menu cell (one_word trusts only tui_ lines and literal cells).
 EXTRA = {
     "inside": "imglib.sh",      # pick_drive: where the drive is (or "USB")
+    "built-in": "gputest.sh",   # G_KIND: which GPU it is
+    "discrete": "gputest.sh",
 }
 
 # Lines that only write the report or a log: the report stays English.

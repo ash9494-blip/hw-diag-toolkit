@@ -810,6 +810,28 @@ def _icon(name, d, cx, cy, size, col):
         solidbox(4.8, 9.8, 13.5, 14.2, 1.0)
         pl([(20.4, 10.4), (20.4, 13.6)])
 
+    elif name == "gpu":                                   # a graphics card: its fan, the slot fingers
+        box(2.5, 6.5, 21.5, 16, 2.2)
+        d.ellipse([X(9) - 3.4 * u, Y(11.25) - 3.4 * u, X(9) + 3.4 * u, Y(11.25) + 3.4 * u],
+                  outline=col, width=w)
+        dot(9, 11.25, 1.0)
+        ln(15, 9.5, 18.5, 9.5); ln(15, 13, 18.5, 13)
+        for x in (7, 10, 13, 16):
+            ln(x, 16, x, 18.8)
+
+    elif name == "fan":                                   # a fan: three blades round the hub
+        import math
+        d.ellipse([X(12) - 9 * u, Y(12) - 9 * u, X(12) + 9 * u, Y(12) + 9 * u],
+                  outline=col, width=w)
+        def at(r, deg):
+            a = math.radians(deg)
+            return (X(12 + r * math.cos(a)), Y(12 + r * math.sin(a)))
+        for k in range(3):
+            a = -90 + k * 120
+            d.polygon([at(1.8, a - 50), at(4.6, a - 32), at(7.0, a - 6),
+                       at(5.2, a + 18), at(1.8, a + 40)], fill=col)
+        dot(12, 12, 1.6)
+
     elif name == "charge":                                # charging - the battery with a bolt
         box(2.5, 7.5, 19, 16.5, 2.4)
         pl([(20.4, 10.4), (20.4, 13.6)])
