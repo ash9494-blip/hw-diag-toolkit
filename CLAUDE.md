@@ -5,8 +5,8 @@ Bootable USB/ISO for bench-testing laptops at Data Dynamics (Johor). Owner: Ash
 minimal Ubuntu live system straight into a full-screen tile menu of hardware
 tests, and writes a per-machine report to the USB stick.
 
-**Current version: 1.24.0** (`toolkit/lib.sh` → `DIAG_VERSION`).
-Last delivered ISO: 1.24.0, SHA256 `263f4e054e72f79610039f65c4acf424a1ff175886d56409e75e61ae88613069`.
+**Current version: 1.25.0** (`toolkit/lib.sh` → `DIAG_VERSION`).
+Last delivered ISO: 1.25.0, SHA256 `c6fbf49dc48dc6d480d09b17f30879af80c6b10b905384655f75374e06f299b2`.
 Version history and the reasoning behind past changes: `docs/HISTORY.md`.
 
 ## Layout
@@ -369,8 +369,12 @@ radio, touchpad or battery. Say so when something is only VM-verified.
 
 ## Open items
 
-- **1.25.0 imaging on the bench** (WSL loop drives, offscreen renders and
-  the renderer driven over its FIFO; VM: see HISTORY): a real USB drive
+- **1.25.0 imaging on the bench** (WSL loop drives, offscreen renders, the
+  renderer driven over its FIFO, and the VM: two USB drives hot-plugged into
+  open Clone lists, C: shrunk + a new DATA made with E on the plan screen,
+  the clone read back PASS and checked from outside, the bar amber while the
+  target was throttled with `block_set_io_throttle` and moving again after).
+  Still to see on real hardware: a real USB drive
   plugged in while a drive list is open, and a slow card reader (does the
   list settle, or flicker as the size arrives); the plan screen's E editor
   dragged on a real touchpad; a clone with sizes set by hand - C: shrunk,
