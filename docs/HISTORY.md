@@ -3,6 +3,47 @@
 Newest first. Each entry says what changed and why; the "why" is usually a
 real machine on Ash's bench.
 
+## 1.21.0 — 2026-10-19
+- **Every animation at 60 frames a second** (Ash: "make the all animation
+  60fps"): the 13 "How it works" animations and the live ones that play
+  while a test runs, in every theme. It was 15. Movement is timed by the
+  clock, so a machine that cannot keep up drops frames and plays no slower.
+  The two deliberate low rates stay: battery drain 1 fps, CPU idle baseline
+  2 fps - a smooth picture must not cost the reading.
+- What made 60 affordable, measured on the build host at 1920x1080 (a frame
+  has 16.7 ms):
+  - Only the part of the screen that moves is sent (`ssdanim.Presenter`):
+    the band under the title and tabs, down to the caption. The header,
+    title row and footer go out only when they can have changed - a new
+    scene, the minute turning, a new title or hint from the test.
+  - It is converted straight into the framebuffer, 64 KB at a time. Each
+    frame used to make three full copies on the way (a crop, the encoder's
+    pieces, the joined bytes) and draw on a fresh 8 MB image; frames are now
+    drawn on one reused canvas. A live frame went from 21.8 ms to 11.5 ms
+    (7.8 ms at 1366x768).
+  - Live frames are timed from when the last one started, not finished: the
+    drawing time was being added to every interval. The key-wait loop also
+    slept at least 10 ms between checks, and now paints only when a frame is
+    due rather than on every wake-up (a moving mouse woke it constantly).
+  - The background is rebuilt when the header clock's minute turns, not every
+    20 s - a rebuild costs several frames, which showed as a stutter.
+  - The text cache drops its oldest quarter when full, not everything.
+- Result in the real renderer, played and live: 59.6-60 fps at 1366x768 and
+  1920x1080, both animation sets, light / mecha / kawaii.
+- **Cost:** a live animation now takes about 43 % of one core at 1366x768
+  and 62 % at 1920x1080 (15 fps on the new code would be 12-17 %). Only the
+  battery drain and CPU idle baseline are capped; the benchmark, controller
+  check, install simulation and RAM test now draw at 60 while they run.
+- **Build checks** (`--check` in both modules, run by finalize_chroot.sh):
+  frame against frame, nothing may change outside the region that is sent -
+  in every scene, theme and size, played and live with the test's figures
+  changing; and end to end, after every frame shown the framebuffer must hold
+  exactly that frame (which also proves the encoder calls work on the image's
+  Pillow). Both were shown to fail when the region or the sending was broken
+  on purpose.
+- Measured on the build host and in the renderer with a file-backed
+  framebuffer; not yet on a real laptop's /dev/fb0.
+
 ## 1.20.0 — 2026-10-07
 New tests from the 1.19 review (Ash: "go ahead"), and network checks taken
 from the netprobe agent where they apply to a laptop on the bench.

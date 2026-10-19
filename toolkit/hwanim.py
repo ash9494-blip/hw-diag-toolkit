@@ -2296,6 +2296,10 @@ def check(sizes=((1280, 800),), themes=("light", "dark", "contrast")):
                             img = lv.frame("A test - live", "Q = stop", items, now=lv.t0 + beats[k][0] * 0.5)
                             assert img.size == (w, h)
                             n += 1
+            # partial updates: nothing may change outside Canvas.moving, live
+            # from the ordinary figures to the worst case
+            n += sa.moving_check(st, KIT, live=[(nm, LIVE_SAMPLES[nm], LIVE_EDGE[nm]) for nm in NAMES])
+            n += sa.present_check(st, KIT, frames=14)
     return n
 
 
@@ -2320,7 +2324,7 @@ def main(argv):
         return 0
     if "--frames" in argv:
         out = opt("--frames", ".")
-        fps = float(opt("--fps", "12"))
+        fps = float(opt("--fps", str(FPS)))
         only = opt("--scene", "")
         os.makedirs(out, exist_ok=True)
         st = _stage_for(w, h, theme)

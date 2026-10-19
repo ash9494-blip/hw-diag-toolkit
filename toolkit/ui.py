@@ -3389,6 +3389,13 @@ def main():
     def live_period():
         return 1.0 / live["anim"].fps
 
+    def live_wait():
+        """Seconds until the next live frame is due. Frames are timed from
+        when the last one *started*: timing from its end added the drawing
+        time to every interval, and at 60 fps that alone cost a third of the
+        frames."""
+        return max(0.001, live["t"] + live_period() - time.time())
+
     def anim_module(name):
         """The set a scene belongs to. Imported on first use, so a fault in
         an animation can only cost that screen, never the renderer's start."""
@@ -3408,8 +3415,10 @@ def main():
         """One frame; False (and live mode ended) if the animation failed -
         the test then shows its usual screen instead of a frozen one."""
         try:
-            fb.blit(live["anim"].frame(scr.title, scr.hint, scr.items))
-            live["t"] = time.time()
+            t0 = time.time()
+            # only the moving part of the picture goes out (ssdanim.Presenter)
+            live["anim"].show(fb, scr.title, scr.hint, scr.items)
+            live["t"] = t0
             return True
         except Exception as exc:
             import traceback
@@ -3429,7 +3438,7 @@ def main():
     try:
         while True:
             r, _, _ = select.select([cmd_fd], [], [],
-                                    min(0.12, live_period()) if live["anim"] is not None else 0.12)
+                                    min(0.12, live_wait()) if live["anim"] is not None else 0.12)
             if r:
                 chunk = os.read(cmd_fd, 65536)
                 if not chunk:                     # writer closed; reopen
@@ -3559,11 +3568,14 @@ def main():
                         end = time.time() + float(parts[1])
                         name = None
                         while True:
-                            if live["anim"] is not None and not live_paint():
+                            # a frame when one is due - not on every wake-up:
+                            # a moving mouse wakes this loop far more often
+                            if live["anim"] is not None and live_wait() <= 0.001 \
+                                    and not live_paint():
                                 dirty = True; scr.render(); dirty = False
                             left = end - time.time()
-                            step = min(left, live_period()) if live["anim"] is not None else left
-                            name, _ = kb.poll(max(0.01, step))
+                            step = min(left, live_wait()) if live["anim"] is not None else left
+                            name, _ = kb.poll(max(0.001, step))   # 10 ms overslept frames
                             if name is not None and name not in Keyboard.POINTER_EVENTS:
                                 break
                             name = None

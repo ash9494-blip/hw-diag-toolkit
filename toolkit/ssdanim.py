@@ -27,7 +27,11 @@ fonts, header and palette):
 """
 import math, os, random, sys, time
 
-FPS = 15                  # target; a slow machine drops frames, the clock does not slow
+# 60 frames a second (Ash: "make the all animation 60fps"). Every movement is
+# timed by the clock, never counted in frames, so a machine that cannot keep up
+# drops frames and nothing plays slower. What makes 60 affordable is in
+# Presenter: only the part of the screen that moves goes to the framebuffer.
+FPS = 60
 
 # ---------------------------------------------------------------- the scripts
 # (seconds, caption). The visuals for each step are in the scene's draw().
@@ -225,7 +229,16 @@ class Canvas:
         self.bot_size(int(26 * s))
         self._tc = {}
         self._bg = {}
-        self._bg_t = 0.0
+        self._bg_minute = ""
+        self.bg = None              # the background the last frame was drawn on
+        # Everything a frame can change lies in here: the band from under the
+        # title and tabs down to the caption. The header, the title row and the
+        # footer hint only change with the background (or, live, the test's
+        # title and hint), and then the whole frame is sent. --check proves,
+        # frame against frame, that nothing is ever drawn outside it. Full
+        # width, so in the framebuffer it is one unbroken run of memory.
+        self.moving = (0, self.tabs_y, self.W, y1)
+        self._canvas = None         # the one image frames are drawn on, reused
 
     def bot_size(self, bh, box=None):
         """Robot height in pixels; the rest of a robot follows from it."""
@@ -239,11 +252,23 @@ class Canvas:
         place their own; drawn last, by draw_bots, so nothing hides it."""
         self.bots.append((xy, held, seed, busy, mood))
 
+    def canvas(self, bg):
+        """The background, on the image frames are drawn on. A fresh copy per
+        frame meant a new 8 MB image 60 times a second, and new memory is
+        paid for page by page; pasting over the same image is not."""
+        from PIL import Image
+        if self._canvas is None or self._canvas.size != bg.size:
+            self._canvas = Image.new(bg.mode, bg.size)
+        self._canvas.paste(bg)
+        return self._canvas
+
     def cached(self, key):
-        """A background built earlier - none once the header clock is stale."""
-        now = time.time()
-        if now - self._bg_t > 20:
-            self._bg = {}; self._bg_t = now
+        """A background built earlier - none once the header clock is stale.
+        Rebuilt when the minute turns, not every 20 s: building one costs
+        several frames, and at 60 a second that showed as a stutter."""
+        minute = time.strftime("%H:%M")
+        if minute != self._bg_minute:
+            self._bg = {}; self._bg_minute = minute
         return self._bg.get(key)
 
     def chrome(self, scenes, short, scene_i):
@@ -304,7 +329,10 @@ class Canvas:
             mask = Image.new("L", (max(1, bb[2] - bb[0]), max(1, bb[3] - bb[1])), 0)
             ImageDraw.Draw(mask).text((-bb[0], -bb[1]), t, font=f, fill=255, anchor=anchor)
             if len(self._tc) > 3000:
-                self._tc.clear()
+                # the oldest quarter, not the lot: a counter ticking up fills
+                # the cache, and clearing it all re-rendered every label at once
+                for k in list(self._tc)[:750]:
+                    del self._tc[k]
             m = self._tc[key] = (mask, bb[0], bb[1])
         mask, ox, oy = m
         x, y = int(round(xy[0] + ox)), int(round(xy[1] + oy))
@@ -1817,11 +1845,15 @@ def live_words(name):
 KIT = sys.modules[__name__]
 
 
-def frame(st, scene_i, t, paused=False, kit=None):
+def frame(st, scene_i, t, paused=False, kit=None, reuse=False):
+    """One frame as an image. reuse=True draws on the stage's one canvas
+    (the player's way: the image is overwritten by the next frame); otherwise
+    a new image, which a caller can keep."""
     from PIL import ImageDraw
     K = kit or KIT
     name, title, prog, beats = K.SCENES[scene_i]
-    img = K.backdrop(st, scene_i).copy()
+    st.bg = K.backdrop(st, scene_i)
+    img = st.canvas(st.bg) if reuse else st.bg.copy()
     d = ImageDraw.Draw(img)
     step, u = locate(beats, t)
     st.lt = u * beats[step][0]
@@ -1834,12 +1866,154 @@ def frame(st, scene_i, t, paused=False, kit=None):
     return img
 
 
+# ---------------------------------------------------------------- showing
+class Presenter:
+    """Puts frames on the framebuffer, sending only what can have moved.
+
+    Converting and writing the whole screen was half the cost of a frame at
+    1920x1080 (10 ms of the 16.7 a 60 fps frame has); the header, title and
+    footer around the picture never change between frames. So the whole frame
+    goes out only when its surroundings may differ - the first frame, a new
+    background (another scene, the minute turning), a new title or hint - and
+    otherwise just Canvas.moving. The background is held, not just its id(),
+    so a rebuilt one can never be mistaken for the old."""
+
+    def __init__(self, st):
+        self.st = st
+        self.bg = None
+        self.extra = None
+
+    def show(self, fb, img, extra=None):
+        st = self.st
+        if st.bg is not self.bg or extra != self.extra or not hasattr(fb, "blit_region"):
+            # a copy: the framebuffer keeps the image it was given (the mouse
+            # pointer restores what was under it from there), and img is the
+            # canvas the next frame is drawn on
+            fb.blit(img.copy())
+            self.bg, self.extra = st.bg, extra
+            return
+        self.send(fb, img, st.moving)
+
+    @staticmethod
+    def send(fb, img, box):
+        """The rows in box, converted straight into the framebuffer's memory,
+        64 KB at a time. tobytes() of a crop made three full copies a frame -
+        the crop, the encoder's pieces and the joined result."""
+        x0, y0, x1, y1 = box
+        m = getattr(fb, "map", None)
+        if m is None or x0 != 0 or x1 != fb.w or fb.stride != fb.rowbytes:
+            fb.blit_region(img.crop(box), x0, y0)        # padded rows: row by row
+            return
+        from PIL import Image
+        e = Image._getencoder(img.mode, "raw", fb.rawmode)
+        e.setimage(img.im, box)
+        m.seek(y0 * fb.stride)
+        # at least one whole row per piece - the raw encoder needs that
+        # (Pillow's own tobytes() sizes its buffer the same way)
+        piece = max(65536, fb.rowbytes)
+        while True:
+            _, err, data = e.encode(piece)
+            m.write(data)
+            if err:
+                break
+        if err < 0:
+            raise RuntimeError("framebuffer encoder error %d" % err)
+
+
+def moving_check(st, kit=None, live=None, samples=16):
+    """What makes sending only Canvas.moving safe: frame against frame,
+    nothing outside it may change - not in the explained animation (a 60th of
+    a second apart, across every step), and not live while the test's own
+    figures change under a fixed title and hint. A violation would leave stale
+    pixels on the screen, so it stops the build. Returns the frames compared."""
+    from PIL import ImageChops
+    K = kit or KIT
+    x0, y0, x1, y1 = st.moving
+    def inside(a, b, what):
+        bb = ImageChops.difference(a, b).getbbox()
+        assert bb is None or (bb[0] >= x0 and bb[1] >= y0 and bb[2] <= x1 and bb[3] <= y1), \
+            "%s: %s changes outside the moving region %s: %s" % (K.__name__, what, st.moving, bb)
+    n = 0
+    for si, (name, _, _, beats) in enumerate(K.SCENES):
+        T = total(beats)
+        for k in range(samples):
+            t = (k + 0.3) * T / samples
+            a = frame(st, si, t, False, K); bg = st.bg
+            b = frame(st, si, t + 1 / 60.0, False, K)
+            if st.bg is bg:                      # a new background is sent whole anyway
+                inside(a, b, "%s at %.2f s" % (name, t))
+            n += 2
+    if live is not None:
+        for name, items_a, items_b in live:
+            beats = K.SCENES[K.NAMES.index(name)][3]
+            for k in range(len(beats)):
+                lv = K.Live(st.scr, __import__("ui").anim_palette())
+                lv.set(name, k, k)
+                now = lv.t0 + beats[k][0] * 0.4
+                a = lv.frame("A test - live", "Q = stop", items_a, now=now); bg = st.bg
+                b = lv.frame("A test - live", "Q = stop", items_b, now=now + 1 / 60.0)
+                if st.bg is bg:
+                    inside(a, b, "live %s step %d" % (name, k + 1))
+                n += 2
+    return n
+
+
+class _MemFB:
+    """A framebuffer in memory, laid out like ui.Framebuffer (BGRX, rows
+    unpadded), for checking what the Presenter really leaves on the screen."""
+    def __init__(self, w, h):
+        import mmap
+        self.w, self.h, self.stride, self.rowbytes, self.rawmode = w, h, w * 4, w * 4, "BGRX"
+        self.map = mmap.mmap(-1, w * h * 4)
+    def blit(self, img):
+        self.map.seek(0); self.map.write(img.tobytes("raw", self.rawmode))
+    def blit_region(self, patch, x, y):
+        w, h = patch.size; data = patch.tobytes("raw", self.rawmode)
+        for r in range(h):
+            self.map.seek((y + r) * self.stride + x * 4); self.map.write(data[r * w * 4:(r + 1) * w * 4])
+    def bytes(self):
+        self.map.seek(0); return self.map.read(self.w * self.h * 4)
+
+
+def present_check(st, kit=None, frames=40):
+    """End to end: after every frame the Presenter shows - partial or whole,
+    across scene changes, live with a title that changes - the framebuffer
+    must hold exactly that frame. Also proves the encoder calls it relies on
+    work with the Pillow on the image. Returns the frames compared."""
+    K = kit or KIT
+    fb = _MemFB(st.W, st.H)
+    pres = Presenter(st)
+    n = 0
+    for si, (name, _, _, beats) in enumerate(K.SCENES):
+        T = total(beats)
+        for f in range(frames // len(K.SCENES) + 3):
+            img = frame(st, si, (f * 0.37) % T, False, K, reuse=True)
+            pres.show(fb, img)
+            assert fb.bytes() == img.tobytes("raw", "BGRX"), \
+                "%s: the screen differs from frame %d of %s" % (K.__name__, f, name)
+            n += 1
+    lv = K.Live(st.scr, __import__("ui").anim_palette())
+    lfb = _MemFB(lv.st.W, lv.st.H)
+    for k, name in enumerate(K.NAMES):
+        lv.set(name, 0, 0)
+        for f in range(4):
+            title = "A test - live" if f < 2 else "A test - next phase"   # a new title: sent whole
+            lv.show(lfb, title, "Q = stop", [("kv", "10", "Time", "%d of 60 s" % f, "")])
+            img = lv.frame(title, "Q = stop", [("kv", "10", "Time", "%d of 60 s" % f, "")],
+                           now=lv._last_now)
+            assert lfb.bytes() == img.tobytes("raw", "BGRX"), \
+                "%s: live screen differs, %s frame %d" % (K.__name__, name, f)
+            n += 1
+    return n
+
+
 # ---------------------------------------------------------------- playing
 def play(scr, kb, pal, start="bench", kit=None):
     """Runs until Esc / Q / right-click. Moves on to the next animation when one
     finishes, so picking the first plays the whole set."""
     K = kit or KIT
     st = K.make_stage(scr, pal)
+    show = Presenter(st)
     i = K.NAMES.index(start) if start in K.NAMES else 0
     clock = 0.0
     last = time.time()
@@ -1854,9 +2028,9 @@ def play(scr, kb, pal, start="bench", kit=None):
         if clock >= total(beats):
             i = (i + 1) % len(K.SCENES); clock = 0.0
             continue
-        scr.fb.blit(frame(st, i, clock, paused, K))
+        show.show(scr.fb, frame(st, i, clock, paused, K, reuse=True))
         spent = time.time() - now
-        key, _ = kb.poll(1.0 if paused else max(0.01, 1.0 / FPS - spent))
+        key, _ = kb.poll(1.0 if paused else max(0.001, 1.0 / FPS - spent))
         if key in (None, "hover", "wheelup", "wheeldown"):
             continue
         if key in ("esc", "q", "back", "backspace"):
@@ -1924,12 +2098,13 @@ class Live:
         """Before the scene is drawn - hwanim.py hands the test's figures to
         its pictures here. The drive scenes draw from their own script."""
 
-    def frame(self, title, hint, items, now=None):
+    def frame(self, title, hint, items, now=None, reuse=False):
         from PIL import ImageDraw
         K, st, P, s = self.K, self.st, self.st.P, self.st.s
         name, _, _, beats = K.SCENES[self.i]
         span = beats[self.first:self.last + 1]
         now = now if now is not None else time.time()
+        self._last_now = now
         lt = (now - self.t0) % total(span)
         step, u, acc = self.first, 0.0, 0.0
         for k, (sec, _) in enumerate(span):
@@ -1939,7 +2114,8 @@ class Live:
             acc += sec
         sec = beats[step][0]
         t = sum(b[0] for b in beats[:step]) + u * sec
-        img = K.backdrop(st, self.i).copy()
+        st.bg = K.backdrop(st, self.i)
+        img = st.canvas(st.bg) if reuse else st.bg.copy()
         d = ImageDraw.Draw(img)
         st.lt = u * sec
         st.clock = now - self.t0
@@ -1953,6 +2129,13 @@ class Live:
         st.text(d, (st.scr.M + int(4 * s), st.H - st.scr.ftr // 2), hint or "",
                 st.scr.f_small, P.MUTED, "lm")
         return img
+
+    def show(self, fb, title, hint, items):
+        """One frame on the screen. The title and hint sit outside the moving
+        region, so a change to either sends the whole frame."""
+        if getattr(self, "_show", None) is None or self._show.st is not self.st:
+            self._show = Presenter(self.st)
+        self._show.show(fb, self.frame(title, hint, items, reuse=True), (self.i, title, hint))
 
     def _title(self, d, title):
         st, P, s = self.st, self.st.P, self.st.s
@@ -2130,11 +2313,21 @@ def main(argv):
                                      now=live.t0 + beats[k][0] * 0.5)
                     assert img.size == (w, h)
                     n += 1
+            # partial updates: nothing may change outside Canvas.moving
+            lv_a = [("kv", "10", "Time", "28 of 60 s", ""), ("bar", "22", 46)]
+            lv_b = [("kv", "10", "Time", "29 of 60 s", ""),
+                    ("kv", "13", "Temperature", "51 C now, 51 C peak", "warn"),
+                    ("line", "15", "an alert that arrived just now and has to wrap in the panel", "err"),
+                    ("bar", "22", 47)]
+            n += moving_check(st, live=[(nm, lv_a, lv_b) for nm in NAMES])
+        for (cw, ch) in ((1024, 768), (1920, 1080)):
+            n += moving_check(_stage_for(cw, ch, "light"), samples=8)
+        n += present_check(_stage_for(1366, 768, "light"))
         print("ssdanim: %d frames rendered OK" % n)
         return 0
     if "--frames" in argv:
         out = opt("--frames", ".")
-        fps = float(opt("--fps", "12"))
+        fps = float(opt("--fps", str(FPS)))
         only = opt("--scene", "")
         os.makedirs(out, exist_ok=True)
         st = _stage_for(w, h, theme)

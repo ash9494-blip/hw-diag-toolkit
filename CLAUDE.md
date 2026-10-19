@@ -5,7 +5,7 @@ Bootable USB/ISO for bench-testing laptops at Data Dynamics (Johor). Owner: Ash
 minimal Ubuntu live system straight into a full-screen tile menu of hardware
 tests, and writes a per-machine report to the USB stick.
 
-**Current version: 1.20.0** (`toolkit/lib.sh` → `DIAG_VERSION`).
+**Current version: 1.21.0** (`toolkit/lib.sh` → `DIAG_VERSION`).
 Last delivered ISO: 1.20.0, SHA256 `2b386ec50d6082c43250fc09f69cb6001122e5e876752ef5e3440fab584c8f5f`.
 Version history and the reasoning behind past changes: `docs/HISTORY.md`.
 
@@ -143,7 +143,11 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   (each call restarts the loop), never inside the redraw loop. A phase that
   ends without a question or result screen (Full run's AUTO mode) must call
   `tui_anim_stop`. Keep the frame rate low where drawing would skew the
-  reading (battery drain fps=1, CPU idle baseline fps=2).
+  reading (battery drain fps=1, CPU idle baseline fps=2). Animations run at
+  60 fps (`ssdanim.FPS`); a live one costs about half a core.
+- Animations only send what moves (`ssdanim.Presenter`): a scene must draw
+  nothing outside `Canvas.moving` except into its background. Both
+  `--check`s prove it frame against frame and fail the build otherwise.
 - Network checks go out of the adapter under test (`ping -I`, `curl
   --interface`, DNS on a socket bound with SO_BINDTODEVICE) - use
   `netcheck.sh`, never a bare `ping`/`getent`: with Wi-Fi and a cable both
