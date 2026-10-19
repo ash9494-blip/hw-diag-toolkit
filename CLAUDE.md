@@ -59,8 +59,13 @@ toolkit/            everything that ends up in /opt/diag on the image
                     (op partedit - Now / After bars, drag), then Apply
   imgparted.py      the editor's model + work: limits, after-picture edits,
                     now->after steps in a safe order (tests: test/imgparted_test.py)
+  imgplanedit.py    the same editor on a clone / restore plan (plan screen,
+                    E = adjust sizes; ui.py PlanEditor): the plan's rules for
+                    what may move, new partitions, re-checks the plan
+                    (tests: test/imgplanedit_test.py, run by the build)
   imglib.sh         shared by imaging.sh / partitions.sh / imgbrowse.sh: drive
-                    and store pickers, BitLocker key entry, run_job
+                    and store pickers (follow hot-plug), BitLocker key entry,
+                    run_job, both editors' questions (PE / STATE)
   imgbrowse.sh      Browse an image (Disk imaging item 6): partition, folders,
                     copy files out next to the image or to another USB drive
   imgbrowse.py      serves a partition out of an image as a read-only NBD
@@ -181,6 +186,10 @@ radio, touchpad or battery. Say so when something is only VM-verified.
 - A peripheral test that can fail for want of a driver is listed in
   `driver_key` / `driver_followup` (menu.sh) with its drivers.tsv types: a
   FAIL (or "NOT TESTED (no ...)") runs `drivercheck.sh --for` on those.
+- Disk imaging: a list of drives or sticks goes through `pick_drive` /
+  `pick_store` (imglib.sh) - they follow hot-plug (`tui_menu_watch`); set
+  `JOB_DEVS` (the disks a job reads and writes) before `run_job`, or its
+  Flow bar has no drive to watch and never shows a stall.
 - Report: `rsection`, `rsilent` → `/run/diag/report.txt`; one `RESULT:` line per
   test; `set_kv KEY value` → `summary.kv`.
 - Comments explain *why* (usually the bug that forced it). Keep that style.
@@ -359,6 +368,15 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   the kernel's table scan needs `blockdev --rereadpt` + `udevadm settle`.
 
 ## Open items
+
+- **1.25.0 imaging on the bench** (WSL loop drives, offscreen renders and
+  the renderer driven over its FIFO; VM: see HISTORY): a real USB drive
+  plugged in while a drive list is open, and a slow card reader (does the
+  list settle, or flicker as the size arrives); the plan screen's E editor
+  dragged on a real touchpad; a clone with sizes set by hand - C: shrunk,
+  WinRE grown, a new D: - booting Windows; the Flow bar's CPU on the
+  slowest bench machine during a compressed backup, and whether it freezes
+  amber on a drive that really stalls.
 
 - **1.24.0 fan and GPU on the bench** (VM only: QEMU's VGA, fake sensors
   via `DIAG_HWMON_ROOT`). GPU: a laptop with a discrete GPU (Optimus /

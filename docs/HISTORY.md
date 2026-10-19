@@ -3,6 +3,53 @@
 Newest first. Each entry says what changed and why; the "why" is usually a
 real machine on Ash's bench.
 
+## 1.25.0 — 2026-10-19
+Three Disk imaging requests from Ash after 1.23.0.
+- **Drive lists follow hot-plug** (Ash: "detecting hot-plug USB, instead of
+  back and select again"). Every drive and USB-stick list in Disk imaging
+  and Partitions updates where it is when a drive is plugged in or pulled
+  out (about 2 s); the highlighted drive stays highlighted and a new one is
+  marked "just plugged in". With nothing to offer, a "plug it in" page waits
+  for one (Q gives up) instead of a message and a trip back. ui.py
+  `BlockWatch` reads /proc/partitions (loop, NBD, dm and RAM devices are
+  the toolkit's own and ignored); a change counts once it has held still
+  1.5 s, so a stick's partitions arrive with it. Ops `menuw`
+  (`tui_menu_watch`: returns 2 with `TUI_HOTSEL`) and `waitdev`
+  (`tui_wait_device`). The text interface waits on the page but does not
+  refresh an open list.
+- **Adjust sizes on the plan screen** (Ash: "when the system shows me the
+  before and after clone size, I want to be able to adjust partition also
+  from there"). E on the Clone / Restore / Macrium-restore plan opens the
+  partition editor (`PlanEditor`, Ash's Now / After pick) on the plan: C:
+  from its data plus the plan's margin up to the next partition; the
+  partitions after C: moved and grown (never shrunk below the old size);
+  free space left anywhere; new partitions (NTFS, exFAT, FAT32, ext4) made
+  empty right after the copy (imgengine `how: "new"`). Partitions before
+  C: keep their place and size - Windows' boot entries find them there.
+  `imgplanedit.py` checks the edited plan again (order, overlap, inside the
+  drive, smallest sizes, MBR's four) before it replaces the plan: only an
+  ok plan writes a drive. The report says "Sizes set by hand on the plan
+  screen". The partition editor's questions (new partition, exact size, the
+  text-screen list) moved to imglib.sh for both editors.
+- **The imaging bar moves - "Flow"** (Ash's pick of four rendered samples:
+  flow, sheen, pulse, block map). Packets run along the fill; mecha's lamps
+  chase to the lit edge; kawaii's candy stripes roll. It follows the job's
+  drives, not the percentage (/sys/block/X/stat): after 10 s with no sector
+  read or written on any of them it stops and turns amber (grey on
+  contrast, where amber is the accent) - a drive that has stopped answering
+  shows as a frozen bar, while a slow shrink or read-back still moves. Only
+  the bar's strip is redrawn, 10 times a second (`Framebuffer.update_region`);
+  a frame that fails turns the motion off for the session. `tui_bar_live
+  row pct DISKS`; run_job's callers set `JOB_DEVS`.
+- The disk benchmark wrote its verdict twice: every run left two `RESULT:`
+  lines and two `DISK_RESULT` entries (a block pasted twice in `run_cdm`).
+  A stale first copy of `wear_report()` is gone too.
+- test/imaging-loop.sh: a clone-edited case (C: shrunk by hand, WinRE grown,
+  a new DATA partition, every file checked); the mbr case no longer
+  overwrites the GPT drive's checksum files - "browse: EFI" failed every
+  full run since 1.23. test/imgplanedit_test.py (16 tests) runs in the
+  build; `skins.py --check` renders the job bar moving and stalled.
+
 ## 1.24.0 — 2026-10-19
 - **GPU check** (`gputest.sh`, main page tile 5 after RAM; Ash). Every
   graphics chip on the PCI bus: the discrete one is woken first (power on,
