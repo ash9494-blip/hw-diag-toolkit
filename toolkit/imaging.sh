@@ -334,14 +334,14 @@ clone_flow() {
 
 # ---------------------------------------------------------------- back up
 backup_flow() {
-  local src est free name dir fs
+  local src est free name dir fs where
   local -a split=()
   rm -f "$W/plan.json"
   pick_drive "Back up which drive?" "the drive is only read" || return
   src=$DRIVE
   scan_drive "$src" || return
   bitlocker_choices "$src" backup
-  pick_store "Save the image where?" "$src" || return
+  pick_place "Save the image where?" "Which USB drive?" "$src" || return
   store_mount || return
   est=$(jq '[.parts[] | if (.fs != "" and .fs != "bitlocker" and .used != null) then .used else .size * 512 end] | add' "$W/scan-$src.json")
   free=$(df -B1 --output=avail "$STORAGE_MNT" | tail -1)
@@ -350,23 +350,31 @@ backup_flow() {
       "The drive holds $(gbytes "$est") of data - even compressed it will not fit."
     umount_storage; return
   fi
-  fs=$(lsblk -dno FSTYPE "$STORAGE_DEV" | tr -d ' ')
+  fs=$(lsblk -dno FSTYPE "$STORAGE_DEV" 2>/dev/null | tr -d ' ')
   [ "$fs" = vfat ] && split=(--split-mb 4000)       # FAT32 stops at 4 GB a file
+  # OneDrive takes a file whole once it is closed, and until then odfs.py
+  # holds it in this laptop's memory: pieces of 256 MB
+  [ "$STORAGE_DEV" = onedrive ] && split=(--split-mb 256)
   # model and serial, cut short: QEMU's model alone ran past the screen edge
   name="$(date +%Y-%m-%d-%H%M)-$(machine_tag | cut -c1-40)-img"
-  dir="$STORAGE_MNT/$name"
+  where=$name
+  [ "$STORAGE_DEV" = onedrive ] && where="Disk images/$name"   # where onedrive.py looks first
+  dir="$STORAGE_MNT/$where"
   tui_confirm "Back up /dev/$src?" yes "$(drive_desc "$src")" "" "To      $STORE_DESC" \
-    "Folder  $name" "Data    $(gbytes "$est") to read, $(gbytes "$free") free there" \
+    "Folder  $where" "Data    $(gbytes "$est") to read, $(gbytes "$free") free there" \
     "$( [ "$free" -lt "$est" ] && echo "It may not fit - that depends how well the data compresses.")" "" "Start?" \
     || { umount_storage; return; }
   rsection "DISK BACKUP -- /dev/$src"
   rsilent "Drive  : $(drive_desc "$src")"
-  rsilent "Image  : $name on $STORE_DESC"
+  rsilent "Image  : $where on $STORE_DESC"
   JOB_FROM=$(drive_desc "$src"); JOB_TO="$name on $STORE_DESC"
-  JOB_DEVS="$src $(store_parent "$STORAGE_DEV")"
+  JOB_DEVS="$src $(store_io)"
   run_job "Backing up /dev/$src" "The image folder is left incomplete - delete it." \
     backup "$W/scan-$src.json" "$dir" --machine "$(dmi system-manufacturer) $(dmi system-product-name), S/N $(dmi system-serial-number)" "${split[@]}"
   $ENG bl-close >/dev/null 2>&1
+  if [ "$JOB_RESULT" = ok ] && [ "$STORAGE_DEV" = onedrive ] && ! od_sync; then
+    JOB_RESULT=failed; JOB_MSG="the image's last files did not reach OneDrive: $OD_ERR"
+  fi
   JOB_READBACK=0
   if [ "$JOB_RESULT" = ok ] && tui_confirm "Backup saved" yes "Saved in $(secs_hms "$JOB_TIME"): $name" "" \
        "Read it back now and test every checksum?" "That takes about as long again, and proves the image restores."; then
@@ -377,7 +385,7 @@ backup_flow() {
     JOB_READBACK=1
   fi
   sync; umount_storage
-  job_result "Backup" "/dev/$src to $name" "The image is in the folder $name on $STORE_DESC." \
+  job_result "Backup" "/dev/$src to $name" "The image is in the folder $where on $STORE_DESC." \
     "Restore it with this toolkit or with Clonezilla."
   JOB_READBACK=1
 }
@@ -424,7 +432,7 @@ macrium_restore() {   # store-disk
   rsilent "Image : ${IMAGE##*/} on $STORE_DESC"
   rsilent "To    : $(drive_desc "$tgt")"
   report_plan "$W/plan.json"
-  JOB_FROM="${IMAGE##*/} on $STORE_DESC"; JOB_TO=$(drive_desc "$tgt"); JOB_DEVS="$tgt $sdisk"
+  JOB_FROM="${IMAGE##*/} on $STORE_DESC"; JOB_TO=$(drive_desc "$tgt"); JOB_DEVS="$tgt $(store_io)"
   run_job "Restoring to /dev/$tgt" "The drive is left half-written - restore it again before using it." \
     clone "$W/plan.json" "${SCRATCH_OPT[@]}"
   scratch_done; mr_detach
@@ -436,7 +444,7 @@ macrium_restore() {   # store-disk
 restore_flow() {
   local tgt sdisk
   rm -f "$W/plan.json"
-  pick_store "Restore from which drive?" || return
+  pick_place "Restore from where?" "Restore from which drive?" || return
   store_mount ro || return
   sdisk=$(store_parent "$STORAGE_DEV")
   pick_image || { umount_storage; return; }
@@ -454,7 +462,7 @@ restore_flow() {
   rsilent "Image : ${IMAGE##*/} on $STORE_DESC"
   rsilent "To    : $(drive_desc "$tgt")"
   report_plan "$W/plan.json"
-  JOB_FROM="${IMAGE##*/} on $STORE_DESC"; JOB_TO=$(drive_desc "$tgt"); JOB_DEVS="$tgt $sdisk"
+  JOB_FROM="${IMAGE##*/} on $STORE_DESC"; JOB_TO=$(drive_desc "$tgt"); JOB_DEVS="$tgt $(store_io)"
   run_job "Restoring to /dev/$tgt" "The drive is left half-written - restore it again before using it." \
     restore "$IMAGE" "$W/plan.json" "${SCRATCH_OPT[@]}"
   scratch_done; umount_storage
@@ -464,11 +472,11 @@ restore_flow() {
 
 verify_flow() {
   rm -f "$W/plan.json"
-  pick_store "Check an image on which drive?" || return
+  pick_place "Check an image from where?" "Check an image on which drive?" || return
   store_mount ro || return
   pick_image || { umount_storage; return; }
   rsection "IMAGE CHECK -- ${IMAGE##*/}"
-  JOB_FROM="${IMAGE##*/} on $STORE_DESC"; JOB_TO=""; JOB_DEVS=$(store_parent "$STORAGE_DEV")
+  JOB_FROM="${IMAGE##*/} on $STORE_DESC"; JOB_TO=""; JOB_DEVS=$(store_io)
   local prog=""
   [ -f "$IMAGE" ] && prog="python3 /opt/diag/mrimg.py"     # a Macrium image: its own checksums
   JOB_PROG=$prog run_job "Checking ${IMAGE##*/}" "Only the check stops - the image is not changed." \
@@ -478,14 +486,17 @@ verify_flow() {
 }
 
 # ---------------------------------------------------------------- menu
+od_restore                  # OneDrive's sign-in and app IDs from the stick, before any store is mounted
 while :; do
+  od="OneDrive|sign in, to back up to it and restore from it"
+  who=$(od_who) && od="OneDrive|signed in as $who - sign out"
   tui_menu "Disk imaging" "clone, back up and restore whole drives - arrows + Enter, Q to go back" \
     "Clone a drive|old drive to new, C: resized to fit - like Macrium's Clone this disk" \
-    "Back up to an image|the whole drive into a folder on a USB drive or this stick" \
+    "Back up to an image|the whole drive into a folder on a USB drive, this stick or OneDrive" \
     "Restore an image|an image onto this drive or a new one, resized to fit" \
     "Check an image|read an image back and test every checksum" \
     "Partitions|split C:, resize, move, make new ones - drag and drop" \
-    "Browse an image|open a partition in an image and copy files out of it" || break
+    "Browse an image|open a partition in an image and copy files out of it" "$od" || break
   case "$TUI_CHOICE" in
     1) clone_flow ;;
     2) backup_flow ;;
@@ -493,7 +504,9 @@ while :; do
     4) verify_flow ;;
     5) /opt/diag/partitions.sh ;;
     6) /opt/diag/imgbrowse.sh ;;
+    7) od_menu ;;
   esac
 done
 $ENG bl-close >/dev/null 2>&1
+od_close
 exit 0

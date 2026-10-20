@@ -86,6 +86,16 @@ pick_dest() {
   # every row two cells, the second short: a long folder name ran off the
   # card, and rows with more cells than the first lost them (VM, 1.21)
   local -a devs=("") labels=("Next to the image|on ${STORE_DESC%%  *}, in a folder named after the image")
+  # not into OneDrive: odfs.py holds a file in memory until it is closed,
+  # and a folder of small files would go up one slow request at a time
+  if [ "$STORAGE_DEV" = onedrive ]; then
+    devs=(); labels=()
+    if [ ${#STORE_DEVS[@]} -eq 0 ]; then
+      tui_msg "Copy to where?" "Files from an image on OneDrive are copied to a USB drive." "" \
+        "Plug one in (exFAT, NTFS or FAT32), then choose Copy again."
+      return 1
+    fi
+  fi
   for i in "${!STORE_DEVS[@]}"; do
     d=${STORE_DEVS[$i]}
     [ "$d" = "$STORAGE_DEV" ] && continue
@@ -193,7 +203,7 @@ browse() {
 }
 
 trap 'close_part; dest_done; umount_storage' EXIT
-pick_store "Browse an image on which drive?" || exit 0
+pick_place "Browse an image from where?" "Browse an image on which drive?" || exit 0
 store_mount ro || exit 0
 pick_image || exit 0
 while pick_part; do

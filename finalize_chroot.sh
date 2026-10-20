@@ -51,6 +51,13 @@ for t in partclone.ntfs partclone.vfat partclone.dd partclone.chkimg ntfsresize 
     || { echo "BUILD ABORTED - $t did not install into the image" >&2; exit 1; }
 done
 echo "imaging tools present: partclone ntfs-3g sgdisk sfdisk parted cryptsetup dmsetup"
+# OneDrive as a place for images (1.26): odfs.py shows it as a folder through
+# FUSE - fusepy, on libfuse 2 (Debian names the module fusepy). The Graph and
+# sign-in side is Python's own urllib/http.client, nothing to install.
+chroot $C apt-get install -y --no-install-recommends python3-fusepy libfuse2t64 2>&1 | tail -1
+chroot $C python3 -c "import fusepy" 2>/tmp/fusepy.err \
+  || { echo "BUILD ABORTED - python3-fusepy does not load in the image: $(tail -1 /tmp/fusepy.err)" >&2; exit 1; }
+echo "OneDrive folder support present: fusepy + libfuse2"
 
 # The touchpad driver chain. All of it ships in linux-modules(-extra); this is
 # here so a future trim can never quietly take a link out - a missing one
@@ -69,10 +76,10 @@ echo "touchpad driver chain present"
 # and disk imaging need from it is asserted, so a kernel change can never
 # quietly drop it: iwlmld (Intel Wi-Fi 7's driver), THC (the touchpad
 # controller on Lunar / Panther Lake), and dm-snapshot, loop, ntfs3 and nbd
-# (Browse an image serves a partition out of the image through it), which
-# imaging builds on.
+# (Browse an image serves a partition out of the image through it) and fuse
+# (OneDrive as a folder), which imaging builds on.
 case "$K" in [0-6].*) echo "BUILD ABORTED - kernel $K is older than 7.0 (bootstrap.sh installs linux-image-generic-hwe-24.04)" >&2; exit 1 ;; esac
-for m in iwlwifi iwlmld intel-thc intel-quicki2c dm-mod dm-snapshot loop ntfs3 nbd; do
+for m in iwlwifi iwlmld intel-thc intel-quicki2c dm-mod dm-snapshot loop ntfs3 nbd fuse; do
   find $C/usr/lib/modules/$K -name "$m.ko*" 2>/dev/null | grep -q . \
     || grep -q "/$m.ko" $C/usr/lib/modules/$K/modules.builtin 2>/dev/null \
     || { echo "BUILD ABORTED - kernel module missing from the image: $m" >&2; exit 1; }
@@ -191,6 +198,8 @@ mkdir -p $C/opt/diag
 # from the source since 1.15, was still in /opt/diag in 1.23.
 rm -f $C/opt/diag/*.sh $C/opt/diag/*.py
 cp $B/toolkit/*.sh $B/toolkit/*.py $C/opt/diag/
+# OneDrive's app registration (two IDs, no secret) - read by onedrive.py
+cp $B/toolkit/onedrive.conf $C/opt/diag/
 # The icon artwork is data the renderer loads at draw time, so it has to travel
 # with the scripts. Missing it does not crash anything - _icon_smooth falls back
 # to drawing - which is exactly why its absence would go unnoticed until the
@@ -310,9 +319,14 @@ gcc -O2 -shared -fPIC -DCOMPRESSION_LEVEL=2 -Dmemory_safe \
     -o $C/opt/diag/lib/libqlz.so $B/toolkit/vendor/quicklz131.c \
   || { echo "BUILD ABORTED - libqlz.so did not build (gcc: setup-host.sh installs it)" >&2; exit 1; }
 cp $B/test/mrimg_test.py $C/tmp/test/
+# and OneDrive (onedrive.py, odfs.py) against test/fakegraph.py, a stand-in
+# for Microsoft's sign-in and Graph on 127.0.0.1: the sign-in, throttling, a
+# lost upload answer, and a backup written as the engine writes one. The
+# kernel mount itself is left to test/imaging-loop.sh (case onedrive).
+cp $B/test/onedrive_test.py $B/test/fakegraph.py $C/tmp/test/
 ln -sfn /opt/diag $C/tmp/toolkit
-for t in imgplan imgparted imgplanedit imgbrowse mrimg; do
-  if ! chroot $C python3 /tmp/test/${t}_test.py > /tmp/$t.out 2>&1; then
+for t in imgplan imgparted imgplanedit imgbrowse mrimg onedrive; do
+  if ! chroot $C env ODTEST_NO_MOUNT=1 python3 /tmp/test/${t}_test.py > /tmp/$t.out 2>&1; then
     echo "BUILD ABORTED - $t.py failed its tests:" >&2
     tail -15 /tmp/$t.out >&2
     exit 1

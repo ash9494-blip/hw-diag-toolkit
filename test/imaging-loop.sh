@@ -34,8 +34,10 @@ lo() {   # file -> /dev/loopN with partitions
   local d; d=$(losetup -f --show -P "$1") || exit 1
   LOOPS="$LOOPS $d"; echo "$d"
 }
+FG=""
 cleanup() {
   umount -q "$W/m" "$W/bm" 2>/dev/null
+  umount -q "$W/onedrive/mnt" 2>/dev/null; [ -n "$FG" ] && kill "$FG" 2>/dev/null   # a onedrive case cut short
   for p in "$RUN_DIR"/browse-nbd*.pid; do      # a browse case that failed half-way
     [ -e "$p" ] && $IB detach "/dev/$(basename "$p" .pid | sed 's/^browse-//')"
   done
@@ -231,7 +233,8 @@ if want backup; then
   for f in "$d-pt.sf" "$d-pt.parted" "$d-mbr" "$d-gpt-1st" "$d-gpt-2nd" "$d-gpt.gdisk"; do
     [ -s "$I/$f" ] || bad "backup: $f missing or empty"
   done
-  ls "$I" | grep -q 'p3.ntfs-ptcl-img.zst.aa$' && ok "backup: C: saved as ntfs partclone image in pieces" || bad "backup: C: image not named as Clonezilla names it"
+  # pieces under 1000 MB get three letters (.aaa): two run out at 676 pieces
+  ls "$I" | grep -q 'p3.ntfs-ptcl-img.zst.aaa*$' && ok "backup: C: saved as ntfs partclone image in pieces" || bad "backup: C: image not named as Clonezilla names it"
   ls "$I" | grep -q 'p2.dd-ptcl-img.zst' && ok "backup: MSR saved as dd image" || bad "backup: MSR image missing"
   ls "$I"/*.idx 2>/dev/null && bad "backup: an index sits among the pieces (Clonezilla would read it)"
   [ -s "$I/diag/${d}p3.idx" ] && ok "backup: frame index written" || bad "backup: no frame index"
@@ -240,7 +243,7 @@ if want backup; then
   status_is "$W/s5" ok verify
   # a broken piece must be caught
   cp -r "$I" "$W/img/broken-img"
-  p=$(ls "$W/img/broken-img/"*p3.ntfs-ptcl-img.zst.aa)
+  p=$(ls "$W/img/broken-img/"*p3.ntfs-ptcl-img.zst.* | head -1)
   printf 'XXXXXXXX' | dd of="$p" bs=1 seek=5000000 conv=notrunc status=none
   $ENG verify "$W/img/broken-img" --status "$W/s5b"
   [ "$(sed -n 's/^result=//p' "$W/s5b")" = failed ] && ok "verify: a damaged image is caught" || bad "verify: damage NOT caught"
@@ -494,6 +497,67 @@ if want macrium; then
     $IB parts "$MT/out/gpt-c1-00-00.mrimg" | grep -q "^2|raw|[0-9]*|MSR|0|" \
       && ok "macrium: MSR listed as no files" || bad "macrium: MSR not refused"
   fi
+fi
+
+if want onedrive; then
+  # Disk imaging to and from OneDrive (1.26). test/fakegraph.py stands in for
+  # Microsoft - sign-in and Graph on 127.0.0.1, its drive a folder here - and
+  # everything else is real: the kernel's FUSE mount, the engine, partclone.
+  say "onedrive: sign in, back up in 256 MB pieces, find it, check it, restore it"
+  OD="python3 $HERE/../toolkit/onedrive.py"
+  ODR=$W/onedrive
+  umount -q "$ODR/mnt" 2>/dev/null; rm -rf "$ODR" "$RUN_DIR/onedrive"; mkdir -p "$ODR/drive" "$ODR/mnt"
+  python3 "$HERE/fakegraph.py" --root "$ODR/drive" > "$ODR/url" & FG=$!
+  for _ in $(seq 50); do [ -s "$ODR/url" ] && break; sleep 0.1; done
+  U=$(cat "$ODR/url")
+  fg() { python3 -c 'import sys, urllib.request as u; print(u.urlopen(u.Request(sys.argv[1], data=b"{}", method="POST")).read().decode())' "$U/$1"; }
+  export OD_LOGIN=$U OD_GRAPH=$U/v1.0 OD_CLIENT=00000000-0000-4000-8000-00000000c11e OD_TENANT=t1
+  $OD signin > "$ODR/code" && ok "onedrive: signed in with code $(head -1 "$ODR/code" | cut -d'|' -f1)" || bad "onedrive: sign-in"
+  [ "$(stat -c %a "$RUN_DIR/onedrive/token.json")" = 600 ] && ok "onedrive: the sign-in is root's only" || bad "onedrive: token file open to others"
+  $OD mount "$ODR/mnt" && mountpoint -q "$ODR/mnt" && ok "onedrive: open as a folder" || bad "onedrive: not mounted"
+  I="$ODR/mnt/Disk images/2026-10-19-test-img"; D="$ODR/drive/Disk images/2026-10-19-test-img"
+  $ENG backup "$W/scan.json" "$I" --status "$W/s40" --split-mb 256 --machine "TEST A40-J"
+  status_is "$W/s40" ok "onedrive backup"
+  [ -e "$D/disk" ] && bad "onedrive: small files went up before the sync" || ok "onedrive: small files held until the sync"
+  fg _reset >/dev/null
+  $OD sync "$ODR/mnt" && ok "onedrive: the rest went up" || bad "onedrive: sync failed"
+  fg _reset | jq -r '.uploads[-2:][]' | grep -c -e '/clonezilla-img$' -e '/diag/image.json$' | grep -qx 2 \
+    && ok "onedrive: the image's markers went up last" || bad "onedrive: markers not last"
+  ls "$D" | grep -q 'p3.ntfs-ptcl-img.zst.aaa$' && ok "onedrive: C: in pieces with three-letter names" || bad "onedrive: piece names"
+  big=$(find "$D" -name '*-ptcl-img.*' -size +256000000c | wc -l)
+  [ "$big" = 0 ] && ok "onedrive: no piece over 256 MB" || bad "onedrive: $big pieces over 256 MB"
+  (cd "$D" && find . -type f | sort | xargs sha256sum) > "$ODR/on-drive.sum"
+  (cd "$I" && sha256sum --quiet -c "$ODR/on-drive.sum" >/dev/null 2>&1) \
+    && ok "onedrive: every file reads back through the folder as it is on OneDrive" || bad "onedrive: folder and drive differ"
+  $OD images "$ODR/mnt" | grep -q "^$I|" && ok "onedrive: found by the image list" || bad "onedrive: image not listed"
+  $ENG verify "$I" --status "$W/s41"
+  status_is "$W/s41" ok "onedrive verify"
+  T=$(fresh_target "$W/t40.img" 4500)
+  $ENG plan-restore "$I" "${T#/dev/}" > "$W/plan40.json"
+  $ENG restore "$I" "$W/plan40.json" --status "$W/s42"
+  status_is "$W/s42" ok "onedrive restore"
+  check_all "$T" "onedrive restore"
+  MT=${MRIMG_TEST:-/mnt/c/Users/Ash/mrimg-test}
+  if [ -f "$MT/out/gpt-c1-00-00.mrimg" ]; then
+    [ -n "${DIAG_QLZ:-}" ] || { gcc -O2 -shared -fPIC -DCOMPRESSION_LEVEL=2 -Dmemory_safe -o "$W/libqlz.so" \
+      "$HERE/../toolkit/vendor/quicklz131.c" && export DIAG_QLZ=$W/libqlz.so; }
+    mkdir -p "$ODR/drive/Old backups/X40"; cp "$MT/out/gpt-c1-00-00.mrimg" "$ODR/drive/Old backups/X40/"
+    M="$ODR/mnt/Old backups/X40/gpt-c1-00-00.mrimg"
+    $OD images "$ODR/mnt" | grep -q "^$M|" && ok "onedrive: a Macrium image deep in a folder is found" || bad "onedrive: Macrium image not found"
+    N=$($IB attach "$M" 3)
+    if [ -n "$N" ] && $IB mount "$N" "$W/bm" >/dev/null \
+        && (cd "$W/bm" && md5sum --quiet -c "$MT/gpt-c.md5" >/dev/null 2>&1); then
+      ok "onedrive: a Macrium image's C: browsed off OneDrive, every file matches"
+    else
+      bad "onedrive: Macrium browse failed"
+    fi
+    [ -n "$N" ] && $IB close "$W/bm" "$N"
+  fi
+  $OD umount "$ODR/mnt"
+  mountpoint -q "$ODR/mnt" && bad "onedrive: still mounted" || ok "onedrive: closed"
+  kill $FG; wait $FG 2>/dev/null
+  unset OD_LOGIN OD_GRAPH OD_CLIENT OD_TENANT
+  src_same onedrive
 fi
 
 if want stop; then

@@ -249,21 +249,24 @@ def copy_boot_area(src_dev, tgt, plan, mbr_file=None, gap_file=None):
     """The boot code in front of the partition table (440 bytes - the disk
     signature and table after it are sfdisk's), and on an MBR disk whatever a
     boot loader keeps between it and the first partition."""
+    # quoted: an image on OneDrive sits in "Disk images/..." - the space split
+    # dd's if= and every restore from there failed here (1.26)
+    q = imgfmt.quote
     src = mbr_file or src_dev
     if src:
-        sh("dd if=%s of=%s bs=440 count=1 conv=notrunc,fsync status=none" % (src, tgt))
+        sh("dd if=%s of=%s bs=440 count=1 conv=notrunc,fsync status=none" % (q(src), q(tgt)))
     if plan["label"] != "dos" or not plan["parts"]:
         return
-    first = min(q["nstart"] for q in plan["parts"])
+    first = min(p["nstart"] for p in plan["parts"])
     n = min(first, 2048) - 1
     if n <= 0:
         return
     if gap_file:
         sh("dd if=%s of=%s bs=512 seek=1 count=%d conv=notrunc,fsync status=none"
-           % (gap_file, tgt, n))
+           % (q(gap_file), q(tgt), n))
     elif src_dev:
         sh("dd if=%s of=%s bs=512 skip=1 seek=1 count=%d conv=notrunc,fsync status=none"
-           % (src_dev, tgt, n))
+           % (q(src_dev), q(tgt), n))
 
 
 # ---------------------------------------------------------------- filesystems
@@ -525,8 +528,10 @@ def save_part(job, q, imgdir, name, split_mb):
     job.undo.append(lambda: os.path.exists(tmpc) and os.remove(tmpc))
     frames = ("split -b %d --filter='zstd -q -T0 -3 -c > \"$TMPC\" && "
               "stat -c %%s \"$TMPC\" >> \"$IDX\" && cat \"$TMPC\"'" % imgfmt.CHUNK)
-    out = ("split -a 2 -b %dMB - %s." % (split_mb, imgfmt.quote(prefix)) if split_mb
-           else "cat > %s" % imgfmt.quote(prefix))
+    # two letters are 676 pieces: 2.7 TB at FAT32's 4000 MB, but only 173 GB
+    # at OneDrive's 256 MB - three letters there (imgfmt reads either)
+    out = ("split -a %d -b %dMB - %s." % (2 if split_mb >= 1000 else 3, split_mb, imgfmt.quote(prefix))
+           if split_mb else "cat > %s" % imgfmt.quote(prefix))
     open(idx, "w").close()
     os.environ["TMPC"], os.environ["IDX"] = tmpc, idx
     job.track("%s | %s | %s" % (reader, frames, out), "saving %s" % describe(q))
@@ -826,6 +831,12 @@ def rows(plan):
     return out
 
 
+def _line(*cells):
+    """One picker line. The notes come from the image - on OneDrive, from
+    anyone's upload: a line break in them would be a picker line of its own."""
+    return "|".join(re.sub(r"[\x00-\x1f]", " ", str(x)).replace("|", "/") for x in cells)
+
+
 def macrium_line(path):
     """A Macrium image for the picker - the reason in place of the machine
     when it is one this toolkit cannot open (split, incremental, password)."""
@@ -841,7 +852,7 @@ def macrium_line(path):
         img.close()
     except (mrimg.NotMacrium, mrimg.Unsupported, OSError) as exc:
         machine, drive = "Macrium, cannot open: %s" % str(exc).split(" - ")[0], ""
-    return "|".join(x.replace("|", "/") for x in (path, saved, machine, imgplan.gb(size), drive))
+    return _line(path, saved, machine, imgplan.gb(size), drive)
 
 
 def image_line(d):
@@ -859,8 +870,7 @@ def image_line(d):
         saved = time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(d)))
         machine, drive = "saved by Clonezilla", ""
     size = sum(os.path.getsize(f) for f in glob.glob(os.path.join(d, "*-ptcl-img.*")))
-    return "|".join(x.replace("|", "/") for x in
-                    (d, saved, machine, imgplan.gb(size), drive.strip()))
+    return _line(d, saved, machine, imgplan.gb(size), drive.strip())
 
 
 def load(path):

@@ -3,6 +3,74 @@
 Newest first. Each entry says what changed and why; the "why" is usually a
 real machine on Ash's bench.
 
+## 1.26.0 — 2026-10-19
+- **OneDrive as a place for images** (Ash: "for image restore not only rely
+  on usb, but also to search image on onedrive, and back up from there").
+  Back up, Restore, Check and Browse an image first ask "USB drive or
+  OneDrive" (Ash: "it always ask me to plug in USB when imaging ... if i
+  choose one drive, then ask me credential, if i choose usb, wait for usb
+  to plugged in"): USB goes to the drive list, which waits for a drive
+  (Q goes back to the question); OneDrive goes to the sign-in. A toolkit
+  without the app's IDs asks for them on screen once - Application (client)
+  ID and Directory (tenant) ID, from the app's Overview page - and keeps
+  them on the stick; if Microsoft does not know them it says so and asks
+  again (his work account, Data Dynamics). Sign-in is Microsoft's device
+  code: the screen shows a code, Ash types it at microsoft.com/devicelogin on
+  his phone and approves there - no password is typed on a bench laptop.
+  The sign-in is kept on the boot stick (`diag-onedrive.json`, beside the
+  settings), Ash's choice after being told anyone holding the stick can
+  then open his OneDrive; Disk imaging -> OneDrive shows who is signed in
+  and signs out, deleting it from the laptop and the stick. No internet:
+  a cable is tried, then the Wi-Fi page is offered.
+  - `onedrive.py`: sign-in and Microsoft Graph over Python's own
+    http.client (connections kept alive - a TLS handshake per 8 MB read cost
+    more than the read), retries on throttling and dropped connections, the
+    sign-in renewed and rewritten as Microsoft rotates it. Images are found
+    by Microsoft's search (.mrimg files and Clonezilla folders anywhere) and
+    by reading the top of the drive, its folders and "Disk images" directly
+    (search lags an upload by minutes).
+  - `odfs.py`: OneDrive as a folder (FUSE, python3-fusepy), so the imaging
+    engine, mrimg.py and Browse work on it unchanged. Reads are 8 MB ranged
+    downloads with three fetched ahead; a look elsewhere in a file (a
+    Macrium image's index) fetches 512 KB. OneDrive takes a file only whole,
+    with its size given first, so a file being written waits in memory
+    until closed: backups to OneDrive go in 256 MB pieces into
+    "Disk images/<name>", each sent when split closes it (a failed upload
+    fails the backup with OneDrive's reason); the small files go up at the
+    end, the image's own markers last, so a backup cut off never looks
+    finished. Browse copies files out of an image on OneDrive to a USB
+    drive only.
+  - Pieces under 1000 MB are named with three letters (.aaa): two run out
+    at 676 pieces, 173 GB at 256 MB.
+  - The Flow bar also watches the network ports for OneDrive jobs: while a
+    piece uploads the drive being read waits, and the bar would have turned
+    amber.
+  - The app's two IDs (Ash's registration in Data Dynamics' Entra ID; a
+    public client - no secret) are in onedrive.conf, or in
+    diag-onedrive.conf on the stick, so no rebuild is needed when they
+    change.
+  - Tests: test/fakegraph.py stands in for Microsoft (strict about upload
+    fragments, the Authorization header, case; throttles, loses an answer,
+    expires links on request); test/onedrive_test.py runs in the build;
+    imaging-loop.sh case onedrive mounts it for real and backs up, finds,
+    checks and restores through it.
+  - Fixed on the way: a restore wrote the boot code with `dd if=<path>`
+    unquoted - the space in "Disk images" made every restore from OneDrive
+    fail (USB image folders never had one).
+  - A security review before delivery: the sign-in is read from and kept
+    on the boot stick only (a stranger's DIAGDATA stick could have brought
+    its own account and taken customer images there); the build's app IDs
+    win over a stick's, and IDs that are not IDs count as none; the backup
+    confirm names the account as Microsoft does, not the kept label; Sign
+    out overwrites the stick's copy before deleting it (FAT keeps deleted
+    clusters) and no longer says "removed from the stick" when a stick
+    place could not be written; a write the RAM spool only half took, a
+    piece OneDrive holds short, or an OneDrive folder that died before the
+    last files went up all fail the backup instead of passing it; a wrong
+    clock says so instead of "no internet"; next-page links must be Graph's.
+  - The new screens are in the Chinese, Japanese and Korean catalogues
+    (machine translation, like the rest - for a native speaker to check).
+
 ## 1.25.0 — 2026-10-19
 Three Disk imaging requests from Ash after 1.23.0.
 - **Drive lists follow hot-plug** (Ash: "detecting hot-plug USB, instead of

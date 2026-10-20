@@ -5,8 +5,10 @@ Bootable USB/ISO for bench-testing laptops at Data Dynamics (Johor). Owner: Ash
 minimal Ubuntu live system straight into a full-screen tile menu of hardware
 tests, and writes a per-machine report to the USB stick.
 
-**Current version: 1.25.0** (`toolkit/lib.sh` → `DIAG_VERSION`).
-Last delivered ISO: 1.25.0, SHA256 `c6fbf49dc48dc6d480d09b17f30879af80c6b10b905384655f75374e06f299b2`.
+**Current version: 1.26.0** (`toolkit/lib.sh` → `DIAG_VERSION`).
+Last delivered ISO: 1.26.0, SHA256 `79f1babdaaf4efe20de5abe72c0216a1a74c5daa3c4e514dba6c64d196d06e91`
+(asks "USB or OneDrive" first; with no app IDs built in, choosing OneDrive
+asks for them on screen and keeps them in the stick's diag-onedrive.conf).
 Version history and the reasoning behind past changes: `docs/HISTORY.md`.
 
 ## Layout
@@ -78,6 +80,16 @@ toolkit/            everything that ends up in /opt/diag on the image
                     Browse; verify (tests: test/mrimg_test.py, run by the build)
   vendor/quicklz131.c  QuickLZ 1.31 (GPL) - Macrium 8's compression; the build
                     compiles it to /opt/diag/lib/libqlz.so on the host
+  onedrive.py       Ash's work OneDrive as an image store: device code sign-in
+                    (code typed on his phone), Microsoft Graph over http.client
+                    (kept-alive connections), find images (search + walk),
+                    mount/sync/umount; onedrive.conf = the app's two IDs
+                    (or diag-onedrive.conf on the stick)
+  odfs.py           OneDrive as a folder (FUSE via python3-fusepy, fsname
+                    "onedrive"): 8 MB ranged reads + read-ahead; a file being
+                    written is held in /dev/shm until closed (uploads need the
+                    size up front) - small ones until .diag-sync (tests:
+                    test/onedrive_test.py against test/fakegraph.py)
   ui.py             Pillow framebuffer renderer (/dev/fb0), all screens + the
                     interactive tests (keyboard, pointer, touchscreen, camera)
   skins.py          the anime themes (mecha, kawaii): ui.py hands header,
@@ -189,7 +201,23 @@ radio, touchpad or battery. Say so when something is only VM-verified.
 - Disk imaging: a list of drives or sticks goes through `pick_drive` /
   `pick_store` (imglib.sh) - they follow hot-plug (`tui_menu_watch`); set
   `JOB_DEVS` (the disks a job reads and writes) before `run_job`, or its
-  Flow bar has no drive to watch and never shows a stall.
+  Flow bar has no drive to watch and never shows a stall. The store's side
+  is `$(store_io)`: its disk, or the network ports for OneDrive.
+- OneDrive is one more store: `pick_place` asks "USB or OneDrive" first (back
+  up, restore, check, browse - Ash: "it always ask me to plug in USB"; never
+  scratch space, which stays `pick_store`, USB only). USB goes to the drive
+  list, which waits for a plug-in (Q: back to the question); OneDrive with
+  no app IDs asks for them (`od_setup`, kept on the stick; asked again when
+  Microsoft refuses them, onedrive.py exit 4), then `STORAGE_DEV=onedrive`,
+  mounted at `/mnt/onedrive` by `od_mount` and left open until Disk imaging
+  exits (`od_close`). A backup there is not done until `od_sync` (the small
+  files go up last, the image's markers after them). Browse never copies
+  into OneDrive. The sign-in is kept on the stick (`diag-onedrive.json`) -
+  Ash's explicit choice; Disk imaging -> OneDrive signs out and deletes it
+  (shred first: FAT keeps deleted clusters). Only the boot stick's own
+  partitions hold or give it (`od_places`) - a stranger's DIAGDATA stick
+  must not bring its account; the build's app IDs win over the stick's; the
+  backup confirm shows the account from a live `/me` (`whoami --live`).
 - Report: `rsection`, `rsilent` → `/run/diag/report.txt`; one `RESULT:` line per
   test; `set_kv KEY value` → `summary.kv`.
 - Comments explain *why* (usually the bug that forced it). Keep that style.
@@ -366,8 +394,34 @@ radio, touchpad or battery. Say so when something is only VM-verified.
 - NBD devices now allow partitions (`modprobe nbd`, no max_part=0): Restore
   from a Macrium image serves the whole drive and clones from nbdNp1...;
   the kernel's table scan needs `blockdev --rereadpt` + `udevadm settle`.
+- OneDrive (Graph): an upload must give its total size up front - no
+  streaming of unknown length - hence odfs.py's spool and the 256 MB backup
+  pieces (`split -a 3` below 1000 MB: two letters stop at 676 pieces). An
+  upload-session URL must NOT get the Authorization header (401); fragments
+  are multiples of 320 KiB; a fragment whose answer was lost is resent and
+  gets 416 - ask the session where to go on. Download links (`@microsoft.
+  graph.downloadUrl`) carry their own key and run out after about an hour;
+  never log a URL's query. Work-OneDrive search results often have no
+  `parentReference.path` (fetch the item) and search lags uploads by
+  minutes. Names ignore case. Debian's fusepy module is `fusepy`, not
+  `fuse`. A spool file must be unbuffered: `>>` appends at the size
+  getattr reported.
 
 ## Open items
+
+- **1.26.0 OneDrive on the real tenant** (tested only against
+  test/fakegraph.py: unit tests, a real FUSE mount in WSL, imaging-loop.sh
+  case onedrive - backup in 256 MB pieces, find, check, restore, a Macrium
+  image browsed off it). Still to see with Ash's app registration (he sends
+  the Application (client) ID and Directory (tenant) ID - into
+  onedrive.conf, or diag-onedrive.conf on the stick): the device code
+  sign-in on his phone (Conditional Access may block device code flow -
+  then his admin must allow it for this app), whether Microsoft's search
+  finds his .mrimg files by "mrimg", real upload/download speed on the
+  bench network and the CPU odfs.py costs, a restore of one of his real
+  Macrium images straight off OneDrive, the sign-in found again after a
+  reboot (Ventoy stick), and Sign out. Ask Ash before writing test data to
+  his OneDrive.
 
 - **1.25.0 imaging on the bench** (WSL loop drives, offscreen renders, the
   renderer driven over its FIFO, and the VM: two USB drives hot-plugged into

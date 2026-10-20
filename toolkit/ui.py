@@ -438,9 +438,16 @@ class BarLive:
         total, seen = 0, False
         for d in self.devs:
             try:
-                with open("/sys/block/%s/stat" % d) as f:
-                    v = f.read().split()
-                total += int(v[2]) + int(v[6])          # sectors read, sectors written
+                if os.path.isdir("/sys/block/" + d):
+                    with open("/sys/block/%s/stat" % d) as f:
+                        v = f.read().split()
+                    total += int(v[2]) + int(v[6])      # sectors read, sectors written
+                else:
+                    # a network port (1.26): an image going to or coming from
+                    # OneDrive moves there, while the drive waits on it
+                    for c in ("rx_bytes", "tx_bytes"):
+                        with open("/sys/class/net/%s/statistics/%s" % (d, c)) as f:
+                            total += int(f.read())
                 seen = True
             except (OSError, ValueError, IndexError):
                 pass
