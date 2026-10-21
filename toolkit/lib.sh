@@ -16,7 +16,7 @@
 # needs silencing here.
 exec 8>&-
 
-DIAG_VERSION="1.20.0"
+DIAG_VERSION="1.26.0"
 RUN_DIR=/run/diag
 REPORT_TXT="$RUN_DIR/report.txt"
 SUMMARY_KV="$RUN_DIR/summary.kv"
@@ -239,6 +239,22 @@ disk_temp_c() {
   case "$v" in ''|*[!0-9]*) echo -1 ;; *) echo "$v" ;; esac
 }
 
+# "866.7 MBit/s VHT-MCS 9 80MHz short GI VHT-NSS 2" -> "Wi-Fi 5, 80 MHz, 2 streams"
+# (the wireless test, and System information's More info page)
+link_kind() {   # tx bitrate text
+  printf '%s\n' "$1" | awk '{
+    gen = "Wi-Fi 1-3 (a/b/g)"
+    if ($0 ~ /EHT-/) gen = "Wi-Fi 7"; else if ($0 ~ /HE-/) gen = "Wi-Fi 6"
+    else if ($0 ~ /VHT-/) gen = "Wi-Fi 5"; else if ($0 ~ / MCS /) gen = "Wi-Fi 4"
+    w = 20; if (match($0, /[0-9]+MHz/)) w = substr($0, RSTART, RLENGTH - 3)
+    n = ""
+    if (match($0, /NSS [0-9]+/)) n = substr($0, RSTART + 4, RLENGTH - 4)
+    else if (match($0, / MCS [0-9]+/)) n = int(substr($0, RSTART + 5, RLENGTH - 5) / 8) + 1
+    printf "%s, %s MHz", gen, w
+    if (n != "") printf ", %s stream%s", n, (n == 1 ? "" : "s")
+  }'
+}
+
 pcie_gen() {
   case "${1%% *}" in
     2.5) echo "1.0" ;; 5.0|5) echo "2.0" ;; 8.0|8) echo "3.0" ;;
@@ -369,10 +385,15 @@ _mount_storage() {   # $1 = "ro" for a read-only mount
   STORAGE_MNT=/mnt/diagdata
   mkdir -p "$STORAGE_MNT"
   mountpoint -q "$STORAGE_MNT" && umount -l "$STORAGE_MNT" 2>/dev/null
+  # FAT: this kernel's default file-name charset is iso8859-1, so a Chinese
+  # or Japanese name copied out of an image failed (EINVAL) or came out
+  # garbled (1.21). utf8 stores any name the way Windows reads it back.
+  local opt=""
+  [ "$(blkid -o value -s TYPE "$STORAGE_DEV" 2>/dev/null)" = vfat ] && opt=utf8
   if [ "$1" = ro ]; then
-    mount -o ro "$STORAGE_DEV" "$STORAGE_MNT" 2>"$RUN_DIR/mnterr" || return 1
+    mount -o "ro${opt:+,$opt}" "$STORAGE_DEV" "$STORAGE_MNT" 2>"$RUN_DIR/mnterr" || return 1
   else
-    mount "$STORAGE_DEV" "$STORAGE_MNT" 2>"$RUN_DIR/mnterr" || return 1
+    mount ${opt:+-o "$opt"} "$STORAGE_DEV" "$STORAGE_MNT" 2>"$RUN_DIR/mnterr" || return 1
   fi
   STORAGE_OWNED=1
   [ "$1" = ro ] && return 0
@@ -391,6 +412,155 @@ umount_storage() {
   sync
   [ "$STORAGE_OWNED" = 1 ] && umount "$STORAGE_MNT" 2>/dev/null
   STORAGE_OWNED=0
+}
+
+# ---------- settings kept on the boot stick ----------
+# settings.conf lives in RAM, so every choice was gone at the next boot. Keeping
+# one took "Save settings to the USB stick", and even then the copy was only
+# looked for inside the ISO's own filesystem - which on a Ventoy stick is the
+# read-only ISO image, so a saved theme never came back (1.20, Ash). Now every
+# change is written to the stick (keep_settings) and read back before the first
+# screen (restore_settings). Only DIAGDATA or the boot stick itself is ever
+# written - never the laptop's drives, never a stick plugged in for a test.
+SETTINGS_NAME=diag-settings.conf
+
+live_medium_dev() {   # the device the live system was booted from
+  local m s
+  # this image's live-boot mounts it under /usr/lib/live/mount, not /run/live:
+  # looking only there found no boot stick at all (1.20.1, VM)
+  for m in /run/live/medium /usr/lib/live/mount/medium /lib/live/mount/medium; do
+    s=$(findmnt -no SOURCE "$m" 2>/dev/null | head -1)
+    [ -n "$s" ] && { printf '%s\n' "$s"; return 0; }
+  done
+  s=$(blkid -L DIAGTOOL 2>/dev/null)   # the ISO's own volume label
+  [ -n "$s" ] && printf '%s\n' "$s"
+}
+
+boot_stick_disk() {   # -> sdb: the disk the toolkit booted from, if it is one
+  local n t i s
+  n=$(live_medium_dev)
+  case "$n" in /dev/*) n=$(basename "$(readlink -f "$n")") ;; *) return 1 ;; esac
+  # up the tree to the disk itself: sdb1 -> sdb, and Ventoy's dm-0 -> sdb
+  for i in 1 2 3; do
+    t=$(lsblk -dno TYPE "/dev/$n" 2>/dev/null | tr -d ' ')
+    [ "$t" = disk ] && { printf '%s\n' "$n"; return 0; }
+    s=$(lsblk -dno PKNAME "/dev/$n" 2>/dev/null | head -1 | tr -d ' ')
+    [ -z "$s" ] && for s in /sys/block/"$n"/slaves/*; do s=${s##*/}; break; done
+    case "$s" in ''|'*') return 1 ;; esac
+    n=$s
+  done
+  return 1
+}
+
+dm_named() {   # name -> /dev/dm-N of the device-mapper device called that
+  local f
+  for f in /sys/block/dm-*/dm/name; do
+    [ "$(cat "$f" 2>/dev/null)" = "$1" ] || continue
+    f=${f%/dm/name}; printf '/dev/%s\n' "${f##*/}"; return 0
+  done
+  return 1
+}
+
+stick_parts() {   # disk -> its partitions a file can be written to, one per line
+  local p t fs label pt
+  lsblk -lnpo NAME,TYPE "/dev/$1" 2>/dev/null | while read -r p t; do
+    [ "$t" = part ] || continue
+    fs=$(lsblk -dno FSTYPE "$p" 2>/dev/null | tr -d ' ')
+    case "$fs" in vfat|exfat|ntfs|ext2|ext3|ext4) ;; *) continue ;; esac
+    # never the stick's boot partition: Ventoy's VTOYEFI, an EFI system one
+    label=$(lsblk -dno LABEL "$p" 2>/dev/null)
+    pt=$(lsblk -dno PARTTYPE "$p" 2>/dev/null | tr -d ' ')
+    [ "$label" = VTOYEFI ] && continue
+    case "$pt" in c12a7328-f81f-11d2-ba4b-00a0c93ec93b|0xef) continue ;; esac
+    # Ventoy holds the partition its ISOs are on while one is booted, so
+    # the plain device will not mount. Ventoy 1.1.01 and later also map the
+    # whole partition under its own name - its documented way back in.
+    dm_named "${p##*/}" || printf '%s\n' "$p"
+  done
+}
+
+settings_places() {   # where the settings may be kept, best first, one per line
+  local disk
+  {
+    blkid -L DIAGDATA 2>/dev/null
+    disk=$(boot_stick_disk) || exit 0
+    stick_parts "$disk"
+  } | awk 'NF && !seen[$0]++'
+}
+
+# Where a log that must outlive the laptop can go: DIAGDATA, the boot stick,
+# then any other USB stick - never the laptop's own drives. Empty: nothing
+# plugged in that can take it (the battery test warns, 1.22).
+usb_places() {
+  local disk
+  {
+    settings_places
+    lsblk -dnro NAME,TRAN 2>/dev/null | awk '$2 == "usb" {print $1}' | while read -r disk; do
+      stick_parts "$disk"
+    done
+  } | awk 'NF && !seen[$0]++'
+}
+
+restore_settings() {   # at boot, before the renderer starts: stick -> RAM
+  local d
+  for d in $(settings_places); do
+    STORAGE_DEV=$d
+    mount_storage_ro || continue
+    if [ -f "$STORAGE_MNT/$SETTINGS_NAME" ]; then
+      cp "$STORAGE_MNT/$SETTINGS_NAME" "$SETTINGS_FILE"
+      echo "restored from $d" >> "$RUN_DIR/settings.log"
+      umount_storage
+      return 0
+    fi
+    umount_storage
+  done
+  return 1
+}
+
+# After a change: RAM -> stick. 0 with KEPT_ON ("Ventoy, dm-1"), or 1 with
+# KEEP_WHY and KEEP_FIX - one line each, for the operator. With no settings
+# file (Reset everything) the stick's copy is removed instead.
+keep_settings() {
+  local d opts rc label
+  KEPT_ON=""; KEEP_WHY=""; KEEP_FIX=""
+  for d in $(settings_places); do
+    STORAGE_DEV=$d
+    opts=$(findmnt -no OPTIONS --source "$d" 2>/dev/null | head -1)
+    if ! mount_storage; then
+      echo "keep: $d: $(head -1 "$RUN_DIR/mnterr" 2>/dev/null)" >> "$RUN_DIR/settings.log"
+      continue
+    fi
+    if [ -f "$SETTINGS_FILE" ]; then
+      # a new file renamed over the old: a stick pulled mid-write keeps the old one
+      cp "$SETTINGS_FILE" "$STORAGE_MNT/$SETTINGS_NAME.new" 2>>"$RUN_DIR/settings.log" \
+        && mv -f "$STORAGE_MNT/$SETTINGS_NAME.new" "$STORAGE_MNT/$SETTINGS_NAME" 2>>"$RUN_DIR/settings.log"
+    else
+      rm -f "$STORAGE_MNT/$SETTINGS_NAME" 2>>"$RUN_DIR/settings.log"
+    fi
+    rc=$?
+    sync
+    # a FAT stick's live medium is mounted read-only: leave it that way
+    case ",$opts," in *,ro,*) mount -o remount,ro "$STORAGE_MNT" 2>>"$RUN_DIR/settings.log" ;; esac
+    umount_storage
+    if [ "$rc" = 0 ]; then
+      label=$(lsblk -dno LABEL "$d" 2>/dev/null)
+      KEPT_ON="${label:-no label}, $(basename "$d")"
+      echo "kept on $d" >> "$RUN_DIR/settings.log"
+      return 0
+    fi
+  done
+  KEEP_FIX="To keep them: label a FAT32/exFAT partition DIAGDATA, on this stick or another."
+  if dm_named ventoy >/dev/null && ! settings_places | grep -q '^/dev/dm-'; then
+    KEEP_WHY="this Ventoy is older than 1.1.01 and locks its partition"
+    KEEP_FIX="Update Ventoy (Ventoy2Disk, Update - the ISOs stay), or label a partition DIAGDATA."
+  elif [ -n "$(settings_places)" ]; then
+    KEEP_WHY="the USB stick could not be written ($(head -1 "$RUN_DIR/mnterr" 2>/dev/null | cut -c1-60))"
+  elif boot_stick_disk >/dev/null; then
+    KEEP_WHY="this stick holds a read-only image (written with dd or Rufus DD mode)"
+  else
+    KEEP_WHY="the toolkit was not started from a USB stick"
+  fi
+  return 1
 }
 
 need_root() { [ "$(id -u)" = 0 ] || { bad "Must run as root"; exit 1; }; }

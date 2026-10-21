@@ -117,7 +117,9 @@ fetch_pkg() {   # package -> 0 once unpacked into the firmware tree
 # ---------------------------------------------------------------- fixing
 fix_plan() {   # state type detail fix -> what Fix will try, in a line
   case "$1" in
-    FIRMWARE) echo "Fix downloads $4 from the Ubuntu archive and restarts the driver." ;;
+    FIRMWARE)
+      if [ -n "$4" ]; then echo "Fix downloads $4 from the Ubuntu archive and restarts the driver."
+      else echo "No download can fix this: the firmware is on the stick, the kernel is too old for it."; fi ;;
     *)
       if dc_gpu_wait "$3"; then
         echo "Fix tells the sound driver not to wait for graphics, then checks it again."
@@ -185,6 +187,8 @@ fix_device() {   # drivers.tsv line [batch]
       else
         fstep "  no internet - connect a cable or Wi-Fi, then try again" warn
       fi
+    elif [ "$st" = FIRMWARE ]; then
+      fstep "Nothing to download: its firmware is already on the stick" muted
     else
       fstep "Nothing to download: the driver is on the stick and asked for no missing files" muted
     fi
@@ -216,7 +220,11 @@ fix_device() {   # drivers.tsv line [batch]
     if [ "$FIX_OK" != 1 ]; then
       s=$(dc_errors "$id" | tail -1)
       [ -n "$s" ] && tui_line 19 "Kernel: ${s:0:110}" muted
-      tui_line 20 "This points at the part itself, its connector, or a BIOS setting." ""
+      case "$detail" in
+        *"a newer toolkit is needed"*)
+          tui_line 20 "Not a fault in the device: check it in Windows, or with a newer toolkit." "" ;;
+        *) tui_line 20 "This points at the part itself, its connector, or a BIOS setting." "" ;;
+      esac
     fi
     tui_flush; tui_anykey
   fi
@@ -266,6 +274,89 @@ remove_downloads() {
   rsilent "Driver check: downloaded files removed ($n)."
   DC_NOTE="Removed $n downloaded file(s)."
 }
+
+# ---------------------------------------------------------------- after a test
+# drivercheck.sh --for WHAT TYPES FAILED - menu.sh, when a peripheral test
+# failed (FAILED=1) or found no device (0): this check for that kind of device
+# only (TYPES: drivers.tsv types, "|" between). Anything not working is fixed
+# straight away - known fixes, a restart, a missing file fetched online - with
+# no question first (Ash, 1.22: "auto search online for missing driver").
+# Exit 0 when something was fixed: the test is worth running again. Found no
+# device and nothing to fix: says nothing, a laptop without a touchscreen is
+# not news.
+devices_of() {   # states types -> drivers.tsv lines
+  awk -F'|' -v s="$1" -v t="$2" '
+    BEGIN { n = split(s, S, "|"); for (i = 1; i <= n; i++) st[S[i]] = 1
+            n = split(t, T, "|"); for (i = 1; i <= n; i++) ty[T[i]] = 1 }
+    ($1 in st) && ($4 in ty)' "$DC_TSV"
+}
+
+if [ "$1" = --for ]; then
+  what=$2; types=$3; failed=${4:-0}
+  tui_frame "$what - its drivers" "please wait"
+  tui_line 6 "The test did not pass, so its drivers are checked next:" muted
+  tui_line 7 "anything not working is fixed, anything missing is looked for online." muted
+  tui_flush
+  dc_scan
+  mapfile -t todo < <(devices_of "FIRMWARE|NOOUT|UNBOUND" "$types")
+  mapfile -t soft < <(devices_of "OFF|NODRIVER" "$types")
+  # The scan itself gives a device with no driver running its driver from the
+  # stick (dc_try_load: LOADED, "started now") - the VM's unbound e1000 came
+  # back that way and nothing was said. That is a fix too: offer the test again.
+  mapfile -t started < <(devices_of "LOADED" "$types")
+  if [ ${#todo[@]} -eq 0 ] && [ ${#started[@]} -eq 0 ]; then
+    [ "$failed" = 1 ] || [ ${#soft[@]} -gt 0 ] || exit 1
+    rsilent "Driver check for $what: no driver problem found"
+    tui_frame "$what - its drivers" "Enter to go back"
+    row=6
+    if [ ${#soft[@]} -eq 0 ]; then
+      tui_line $row "Every driver for it is working - a driver is not what failed." ok; row=$((row+2))
+    fi
+    for l in "${soft[@]}"; do
+      [ $row -gt 18 ] && break
+      IFS='|' read -r st bus id type name drv ids made detail fix p <<< "$l"
+      tui_kv $row "$name" "$(dc_state_word "$st")" warn; row=$((row+1))
+      e=$(advice "$st"); [ -n "$e" ] && { row=$(tui_para $row "$e" muted); }
+      row=$((row+1))
+    done
+    tui_flush; tui_anykey
+    exit 1
+  fi
+  ok=0; res=()
+  for l in "${started[@]}"; do
+    IFS='|' read -r st bus id type name _ <<< "$l"
+    ok=$((ok+1)); res+=("$name|started now - its driver was not running|ok")
+    rsilent "Driver check for $what: $name started now (its driver was not running)"
+  done
+  for l in "${todo[@]}"; do
+    IFS='|' read -r st bus id type name _ <<< "$l"
+    dc_rescan_one "$bus" "$id"                      # an earlier fix may have mended it
+    if dc_working "$bus" "$id" || fix_device "$(dc_line "$bus" "$id")" batch; then
+      ok=$((ok+1)); res+=("$name|fixed|ok")
+    else
+      res+=("$name|still not working|err")
+    fi
+  done
+  online_end
+  total=$(( ${#todo[@]} + ${#started[@]} ))
+  tui_frame "$what - its drivers" "Enter to continue"
+  tui_badge 6 "$([ $ok = $total ] && echo PASS || { [ $ok -gt 0 ] && echo PARTIAL || echo FAIL; })" \
+    "fixed $ok of $total"
+  row=8
+  for r in "${res[@]}"; do
+    [ $row -gt 17 ] && break
+    IFS='|' read -r name st tone <<< "$r"
+    tui_kv $row "$name" "$st" "$tone"; row=$((row+1))
+  done
+  if [ $ok -gt 0 ]; then
+    tui_line $((row+1)) "Run the test again to see whether it works now."
+  else
+    tui_line $((row+1)) "Not fixed: the part, its connector or a BIOS setting is the likely fault."
+  fi
+  tui_flush; tui_anykey
+  [ $ok -gt 0 ]
+  exit
+fi
 
 # ---------------------------------------------------------------- the list
 DC_NOTE=""

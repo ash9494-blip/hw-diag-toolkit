@@ -55,6 +55,13 @@ if [ ! -f "$RUN_DIR/.seeded" ]; then
   clear
   printf '\n  Detecting hardware, please wait...\n'
   modprobe coretemp 2>/dev/null; modprobe k10temp 2>/dev/null
+  # The settings kept on the boot stick, before the renderer starts: it reads
+  # them once, at start-up. Copied in after it (as up to 1.20.0), the theme
+  # only came back if something restarted the renderer.
+  if restore_settings; then
+    v=$(setting_get layout "")
+    [ -n "$v" ] && printf '%s\n' "$v" > "$RUN_DIR/layout"
+  fi
   NEW_BOOT=1
 fi
 
@@ -62,12 +69,13 @@ daemon_alive || /opt/diag/start-ui.sh || set_console_font
 
 . /opt/diag/tui.sh
 
+# The language, once per boot, before anything else (Ash, 1.22: "after grub
+# selection but before the toolkit launch"). The renderer already has the kept
+# settings, so it opens on the language used last time. Not on the text
+# console: that has no CJK font and stays English.
+[ -n "$NEW_BOOT" ] && [ -n "$TUI_GUI" ] && /opt/diag/settings.sh --boot-language
+
 if [ ! -f "$RUN_DIR/.seeded" ]; then
-  # Settings left on the boot medium by a previous session, if any. Copied in
-  # before the first screen so the theme and text size are right immediately.
-  for m in /run/live/medium /lib/live/mount/medium /usr/lib/live/mount/medium; do
-    [ -f "$m/diag-settings.conf" ] && { cp "$m/diag-settings.conf" "$RUN_DIR/settings.conf"; break; }
-  done
   /opt/diag/sysinfo.sh --quiet
   # Firmware-load failures and driver errors are printed once, while the
   # drivers bind at boot. The ring buffer rolls over on a chatty machine and a
@@ -103,7 +111,7 @@ full_run() {
   [ -z "$disk" ] && diskline="Disk benchmark                                  skipped, no drive found"
 
   tui_confirm "Full diagnostic run" yes \
-    "1.  System info, drivers, battery, SMART        about 1 min" \
+    "1.  System info, drivers, GPU, battery, SMART   about 1 min" \
     "2.  $diskline" \
     "3.  CPU stress and temperature log              about 10 min" \
     "4.  RAM stress test                             about 5 min" \
@@ -115,6 +123,7 @@ full_run() {
 
   /opt/diag/sysinfo.sh --quiet
   /opt/diag/drivercheck.sh --quiet
+  /opt/diag/gputest.sh --quiet
 
   if [ -n "$disk" ]; then
     /opt/diag/disktest.sh auto "$disk" 1G 1
@@ -231,7 +240,51 @@ drop_to_shell() {
   exec /opt/diag/menu.sh
 }
 
+# A peripheral test that fails, or finds no device at all, gets Driver check
+# for its kind of device straight away (Ash, 1.22: "auto search online for
+# missing driver"): what is not working is fixed, a missing firmware file is
+# fetched, and the test is offered again. Types are drivers.sh's.
+driver_key() {   # test -> its result key; 1 for tests no driver can explain
+  case "$1" in
+    touchpad) echo TOUCHPAD_RESULT ;;   touchscreen) echo TOUCHSCREEN_RESULT ;;
+    sound)    echo SOUND_RESULT ;;      camera)      echo CAMERA_RESULT ;;
+    sdcard)   echo SD_RESULT ;;         wireless)    echo WIFI_RESULT ;;
+    network)  echo ETHERNET_RESULT ;;   usb)         echo USB_RESULT ;;
+    *) return 1 ;;
+  esac
+}
+
+driver_followup() {   # test result-key verdicts-before
+  local v failed=0 what types
+  # only a verdict this run wrote - one left from earlier is not news
+  [ "$(grep -c "^$2=" "$SUMMARY_KV" 2>/dev/null)" -gt "$3" ] || return 0
+  v=$(grep "^$2=" "$SUMMARY_KV" | tail -1 | cut -d= -f2-)
+  case "$v" in
+    FAIL*) failed=1 ;;
+    # no device: maybe a driver that never started - but a laptop without a
+    # touchscreen is the usual reason, so this one is checked quietly
+    "NOT TESTED (no "*|*"not found"*|*"no driver"*) ;;
+    *) return 0 ;;
+  esac
+  case "$1" in
+    touchpad)    what=Touchpad;    types="Touch (I2C)|Keyboard / mouse|Serial bus" ;;
+    touchscreen) what=Touchscreen; types="Touch (I2C)|Keyboard / mouse|Serial bus" ;;
+    sound)       what=Sound;       types="Sound|Multimedia" ;;
+    camera)      what=Camera;      types="Camera|Multimedia" ;;
+    sdcard)      what="SD card";   types="Storage|System|Other|USB device" ;;
+    wireless)    what=Wi-Fi;       types="Wi-Fi|Network" ;;
+    network)     what=Ethernet;    types="Ethernet|Network" ;;
+    usb)         what="USB ports"; types="USB controller" ;;
+  esac
+  /opt/diag/drivercheck.sh --for "$what" "$types" "$failed" || return 0
+  tui_confirm "Run the test again?" yes "A driver for it was fixed just now." "" \
+    "Run the test again to see whether it works?" && run_test "$1"
+  return 0
+}
+
 run_test() {   # one dispatcher, so both layouts stay in step
+  local rkey n0=0
+  rkey=$(driver_key "$1") && n0=$(grep -c "^$rkey=" "$SUMMARY_KV" 2>/dev/null)
   case "$1" in
     fullrun)  full_run ;;
     disk)     /opt/diag/disktest.sh ;;
@@ -253,19 +306,24 @@ run_test() {   # one dispatcher, so both layouts stay in step
     camera)   /opt/diag/cameratest.sh ;;
     sdcard)   /opt/diag/sdtest.sh ;;
     lid)      /opt/diag/lidtest.sh ;;
+    gpu)      /opt/diag/gputest.sh ;;
+    fan)      /opt/diag/fantest.sh ;;
     errlog)   /opt/diag/errlog.sh ;;
     network)  /opt/diag/nettest.sh ;;
     system)   /opt/diag/sysinfo.sh ;;
     dmi)      /opt/diag/dmicapture.sh ;;
+    imaging)  /opt/diag/imaging.sh ;;
     drivers)  /opt/diag/drivercheck.sh ;;
     results)  view_report ;;
     save)     /opt/diag/savereport.sh ;;
   esac
+  [ -n "$rkey" ] && driver_followup "$1" "$rkey" "${n0:-0}"
+  return 0
 }
 
 # New tiles go at the end: the numbers already in Ash's hands stay put.
 peripherals_menu() {
-  local acts=(all screen touchpad touchscreen sound usb charging camera network wireless drivers sdcard lid)
+  local acts=(all screen touchpad touchscreen sound usb charging camera network wireless drivers sdcard lid fan)
   while :; do
     tui_grid "Peripherals" "arrows to move, Enter to select      Q = back" \
       "Run them all|grid" \
@@ -280,10 +338,11 @@ peripherals_menu() {
       "Wireless test|wifi|$(test_result WIFI_RESULT)" \
       "Driver check|download|$(test_result DRIVER_RESULT)" \
       "SD card|sdcard|$(test_result SD_RESULT)" \
-      "Lid sensor|lid|$(test_result LID_RESULT)" || return
+      "Lid sensor|lid|$(test_result LID_RESULT)" \
+      "Fan|fan|$(test_result FAN_RESULT)" || return
     if [ "${acts[$((TUI_CHOICE-1))]}" = all ]; then
       local t
-      for t in screen touchpad touchscreen sound usb charging camera network wireless sdcard lid; do run_test "$t"; done
+      for t in screen touchpad touchscreen sound usb charging camera network wireless sdcard lid fan; do run_test "$t"; done
     else
       run_test "${acts[$((TUI_CHOICE-1))]}"
     fi
@@ -291,14 +350,18 @@ peripherals_menu() {
 }
 
 compact_menu() {
-  local acts=(fullrun disk cpu ram battery keyboard peripherals showall wificonnect drivers dmi results save shell system settings errlog)
+  # GPU beside CPU and RAM as tile 5 (Ash, 1.24); Disk imaging beside Keyboard
+  # (1.22) - it was last, 18
+  local acts=(fullrun disk cpu ram gpu battery keyboard imaging peripherals showall wificonnect drivers dmi results save shell system settings errlog)
   tui_grid "Choose a test" "arrows or its number (two digits for 10+), Enter to select      Q = power menu" \
     "Full run|play" \
     "HDD / SSD|disk|$(test_result DISK_RESULT DISK_CTRL DISK_SELFTEST DISK_SMART)" \
     "CPU|cpu|$(test_result CPU_RESULT)" \
     "RAM|ram|$(test_result RAM_RESULT)" \
+    "GPU|gpu|$(test_result GPU_RESULT)" \
     "Battery|battery|$(test_result BATTERY_RESULT)" \
     "Keyboard|keyboard|$(test_result KEYBOARD_RESULT)" \
+    "Disk imaging|clone|$(test_result IMAGING_RESULT)" \
     "Peripherals|grid" "Show all tests|expand" "Wi-Fi|wifi" \
     "Driver check|download|$(test_result DRIVER_RESULT)" "DMI capture|chip" "Results|list" "Save report|save" "Command prompt|terminal" \
     "System|info" "Settings|gear" "Error log|log|$(test_result ERRLOG_RESULT)" || return 1
@@ -311,13 +374,15 @@ compact_menu() {
 }
 
 expanded_menu() {
-  local acts=(fullrun disk cpu ram battery keyboard screen touchpad touchscreen sound usb charging camera sdcard lid network wificonnect wireless drivers errlog dmi results save shell system settings)
+  local acts=(fullrun disk cpu ram gpu battery keyboard imaging screen touchpad touchscreen sound usb charging camera sdcard lid fan network wificonnect wireless drivers errlog dmi results save shell system settings)
   tui_grid "Every test" "arrows or its number, Enter to select      Q = back to the short list" \
     "Full run|play" \
     "HDD / SSD|disk|$(test_result DISK_RESULT DISK_CTRL DISK_SELFTEST DISK_SMART)" \
     "CPU|cpu|$(test_result CPU_RESULT)" "RAM|ram|$(test_result RAM_RESULT)" \
+    "GPU|gpu|$(test_result GPU_RESULT)" \
     "Battery|battery|$(test_result BATTERY_RESULT)" \
     "Keyboard|keyboard|$(test_result KEYBOARD_RESULT)" \
+    "Disk imaging|clone|$(test_result IMAGING_RESULT)" \
     "Screen|screen|$(test_result SCREEN_RESULT)" \
     "Touchpad|touchpad|$(test_result TOUCHPAD_RESULT)" \
     "Touchscreen|touchscreen|$(test_result TOUCHSCREEN_RESULT)" \
@@ -325,6 +390,7 @@ expanded_menu() {
     "USB ports|usb|$(test_result USB_RESULT)" "Charging|charge|$(test_result CHARGE_RESULT)" \
     "Camera|camera|$(test_result CAMERA_RESULT)" \
     "SD card|sdcard|$(test_result SD_RESULT)" "Lid sensor|lid|$(test_result LID_RESULT)" \
+    "Fan|fan|$(test_result FAN_RESULT)" \
     "Ethernet Network|network|$(test_result ETHERNET_RESULT)" "Wi-Fi|wifi" \
     "Wireless test|wifi|$(test_result WIFI_RESULT)" \
     "Driver check|download|$(test_result DRIVER_RESULT)" \

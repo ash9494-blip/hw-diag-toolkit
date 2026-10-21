@@ -27,7 +27,15 @@ fonts, header and palette):
 """
 import math, os, random, sys, time
 
-FPS = 15                  # target; a slow machine drops frames, the clock does not slow
+# Target; a slow machine drops frames, the clock does not slow. 45 (Ash, 1.22:
+# 15 looked jerky) - a frame costs 15-22 ms on an i7-8665U at 1366x768-1080p.
+FPS = 45
+# A scene playing while its test MEASURES keeps 15: at 45 the drawing takes
+# most of a core, which a 2-core bench machine would take out of the disk,
+# RAM or CPU figures. The rest - waits, the charging steps, the explainers -
+# get the full rate. A test can still ask for fewer ("fps=1").
+MEASURE_FPS = 15
+MEASURING = {"bench", "surface", "install", "ctrl", "cpu", "ram", "ether", "wifi"}
 
 # ---------------------------------------------------------------- the scripts
 # (seconds, caption). The visuals for each step are in the scene's draw().
@@ -329,15 +337,25 @@ class Canvas:
         d.ellipse([x - r, y - r, x + r, y + r], fill=fill)
 
     def wrap(self, d, text, f, width, maxlines=3):
-        words, lines, cur = text.split(), [], ""
+        # wrap the translation, not the English (Settings -> Language): Chinese
+        # and Japanese break between characters and take no spaces
+        I = sys.modules.get("i18n")
+        if I is not None:
+            text = I.T(text)
+            words, joiner = I.tokens(text), I.join
+        else:
+            words, joiner = text.split(), " ".join
+        # a list of units per line, joined once: i18n.join keeps the spaces
+        # each unit carries, and a joined line has lost its trailing one
+        lines, cur = [], []
         for w in words:
-            t = (cur + " " + w).strip()
-            if d.textlength(t, font=f) <= width or not cur:
+            t = cur + [w]
+            if d.textlength(joiner(t), font=f) <= width or not cur:
                 cur = t
             else:
-                lines.append(cur); cur = w
+                lines.append(joiner(cur)); cur = [w]
         if cur:
-            lines.append(cur)
+            lines.append(joiner(cur))
         if len(lines) > maxlines:
             lines = lines[:maxlines]
             lines[-1] = lines[-1].rstrip(".,") + "..."
@@ -1902,11 +1920,12 @@ class Live:
         opts = [o for o in opts if o]
         self.st.dramless = "own" not in opts
         self.st.opts = opts
-        self.fps = float(FPS)
+        top = float(MEASURE_FPS if name in MEASURING else FPS)
+        self.fps = top
         for o in opts:
             if o.startswith("fps="):
                 try:
-                    self.fps = max(0.5, min(float(FPS), float(o[4:])))
+                    self.fps = max(0.5, min(top, float(o[4:])))
                 except ValueError:
                     pass
         self.i = K.NAMES.index(name) if name in K.NAMES else 0

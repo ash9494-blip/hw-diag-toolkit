@@ -150,6 +150,11 @@ def sparkle(d, cx, cy, r, fill, edge=None):
 
 
 def spaced(d, xy, text, font, fill, sp, anchor="lm"):
+    # drawn a letter at a time, so translated whole first (Settings -> Language):
+    # one letter alone matches nothing
+    I = sys.modules.get("i18n")
+    if I is not None:
+        text = I.T(text)
     x, y = xy
     for ch in text:
         d.text((x, y), ch, font=font, fill=fill, anchor=anchor)
@@ -412,35 +417,53 @@ def anim_tag(scr, U, d, xy, text):
 
 # ---------------------------------------------------------------- items
 def bar(scr, U, d, it, left, right):
+    # row, pct and - on the imaging bar - its motion (ui.BarLive)
+    pct = max(0, min(100, it[2]))
+    x, y, w, h = scr.bar_geom(it[1], left, right)
+    bar_body(scr, U, d, x, y, w, h, pct, it[3] if len(it) > 3 else None)
+    d.text((right, y + h // 2), "%d%%" % pct, font=scr.f_mono, fill=U.MUTED, anchor="rm")
+
+
+FLOW_LOOP = 2.0      # seconds for mecha's lamp chase to run to the lit edge
+
+
+def bar_body(scr, U, d, left, y, w, h, pct, live=None):
+    """The bar without its % figure. With `live` it is the imaging bar, in
+    the skin's own words for Ash's "Flow": on the deck a chase of brighter
+    lamps runs to the lit edge; on the sticker sheet the candy stripes roll.
+    Amber and still when the drives have stopped (ui.BarLive.stalled)."""
     s = scr.s
-    _, row, pct = it
     pct = max(0, min(100, pct))
-    y = scr.row_y(row) + int(6 * s)
-    h = int(16 * s)
-    w = right - left - int(80 * s)
+    stalled = live is not None and live.stalled
+    moving = live is not None and not stalled
+    col = U.WARN_ if stalled else U.ACCENT
     if U.SKIN == "mecha":
         n = max(10, w // int(14 * s))
         gap = max(2, int(3 * s))
         sw = (w - (n - 1) * gap) / float(n)
         lit = int(round(n * pct / 100.0))
+        head = (live.phase % FLOW_LOOP) / FLOW_LOOP * (lit + 4) - 2 if moving else None
         for k in range(n):
             x = left + k * (sw + gap)
-            d.rectangle([x, y, x + sw, y + h], fill=U.ACCENT if k < lit else MECHA["TAB"])
-    else:
-        d.rounded_rectangle([left, y, left + w, y + h], h // 2, fill=KAWAII["CHIP"], outline=U.LINE)
-        fw = int(w * pct / 100)
-        if fw > h:
-            # candy stripes inside the fill - no word is ever drawn in a bar
-            fill = Image.new("RGB", (fw, h), U.ACCENT)
-            fd = ImageDraw.Draw(fill)
-            per = max(8, int(16 * s))
-            for x in range(-h, fw + per, per):
-                fd.polygon([(x, h), (x + h, 0), (x + h + per // 2, 0), (x + per // 2, h)],
-                           fill=KAWAII["CANDY"])
-            mask = Image.new("L", (fw, h), 0)
-            ImageDraw.Draw(mask).rounded_rectangle([0, 0, fw - 1, h - 1], h // 2, fill=255)
-            d._image.paste(fill, (left, y), mask)
-    d.text((right, y + h // 2), "%d%%" % pct, font=scr.f_mono, fill=U.MUTED, anchor="rm")
+            c = col if k < lit else MECHA["TAB"]
+            if head is not None and k < lit and abs(k - head) < 1.6:
+                c = mix(col, (255, 236, 200), 0.75 * (1 - abs(k - head) / 1.6))
+            d.rectangle([x, y, x + sw, y + h], fill=c)
+        return
+    d.rounded_rectangle([left, y, left + w, y + h], h // 2, fill=KAWAII["CHIP"], outline=U.LINE)
+    fw = int(w * pct / 100)
+    if fw > h:
+        # candy stripes inside the fill - no word is ever drawn in a bar
+        fill = Image.new("RGB", (fw, h), col)
+        fd = ImageDraw.Draw(fill)
+        per = max(8, int(16 * s))
+        stripe = mix(col, U.PAPER, 0.35) if stalled else KAWAII["CANDY"]
+        off = int(live.phase * per * 1.5) % per if moving else 0
+        for x in range(-h - per + off, fw + per, per):
+            fd.polygon([(x, h), (x + h, 0), (x + h + per // 2, 0), (x + per // 2, h)], fill=stripe)
+        mask = Image.new("L", (fw, h), 0)
+        ImageDraw.Draw(mask).rounded_rectangle([0, 0, fw - 1, h - 1], h // 2, fill=255)
+        d._image.paste(fill, (left, y), mask)
 
 
 def badge(scr, U, d, it, left):
@@ -890,6 +913,10 @@ class _FB:
     def blit(self, img):
         self.last = img
 
+    def update_region(self, patch, x, y):       # the imaging bar's strip frames
+        if self.last is not None:
+            self.last.paste(patch, (x, y))
+
 
 SAMPLE_GRID = [
     ("Full run", "play", ""), ("HDD / SSD", "disk", "PASS 09:12"), ("CPU", "cpu", "PASS 09:31"),
@@ -939,6 +966,22 @@ def screens(U, w, h, scale=1.0):
                  ("choice", 14, True)]
     scr.render()
     out.append(("confirm", scr.fb.last))
+    # the imaging job: the bar's motion mid-run, then stalled (amber, still) -
+    # and one strip frame the way the renderer redraws it between screens
+    scr.title, scr.hint = "Cloning /dev/sda to /dev/sdb", "Q = stop"
+    live = U.BarLive([])
+    live.phase = 0.7
+    for name, stalled in (("job", False), ("job-stalled", True)):
+        live.stalled = stalled
+        scr.items = [("kv", "6", "Step", "3 of 5   C: (NTFS)", ""), ("kv", "8", "Speed", "412 MB/s", ""),
+                     ("kv", "12", "To", "/dev/sdb  476.9 GB  Samsung SSD 980", "warn"),
+                     ("bar", "16", 62, live)]
+        scr.render()
+        if not stalled:
+            # a strip frame on top, as between screens - its tick finds no
+            # drive to watch, so it stays moving: only on the moving shot
+            scr.paint_live_bar()
+        out.append((name, scr.fb.last))
     U.TEXT_SCALE = 1.0
     return out
 
