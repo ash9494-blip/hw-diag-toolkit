@@ -8,7 +8,7 @@ tests, and writes a per-machine report to the USB stick.
 **Current version: 1.26.0** (`toolkit/lib.sh` → `DIAG_VERSION`).
 Last delivered ISO: 1.26.0, SHA256 `79f1babdaaf4efe20de5abe72c0216a1a74c5daa3c4e514dba6c64d196d06e91`
 (asks "USB or OneDrive" first; with no app IDs built in, choosing OneDrive
-asks for them on screen and keeps them in the stick's diag-onedrive.conf).
+asks for them on screen and keeps them in the stick's onedrive.config).
 Version history and the reasoning behind past changes: `docs/HISTORY.md`.
 
 ## Layout
@@ -84,7 +84,7 @@ toolkit/            everything that ends up in /opt/diag on the image
                     (code typed on his phone), Microsoft Graph over http.client
                     (kept-alive connections), find images (search + walk),
                     mount/sync/umount; onedrive.conf = the app's two IDs
-                    (or diag-onedrive.conf on the stick)
+                    (or onedrive.config on the stick)
   odfs.py           OneDrive as a folder (FUSE via python3-fusepy, fsname
                     "onedrive"): 8 MB ranged reads + read-ahead; a file being
                     written is held in /dev/shm until closed (uploads need the
@@ -414,7 +414,7 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   case onedrive - backup in 256 MB pieces, find, check, restore, a Macrium
   image browsed off it). Still to see with Ash's app registration (he sends
   the Application (client) ID and Directory (tenant) ID - into
-  onedrive.conf, or diag-onedrive.conf on the stick): the device code
+  onedrive.conf, or onedrive.config on the stick): the device code
   sign-in on his phone (Conditional Access may block device code flow -
   then his admin must allow it for this app), whether Microsoft's search
   finds his .mrimg files by "mrimg", real upload/download speed on the

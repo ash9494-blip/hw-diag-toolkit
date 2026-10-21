@@ -242,7 +242,7 @@ OD="python3 /opt/diag/onedrive.py"
 OD_MNT=/mnt/onedrive
 OD_STATE=$RUN_DIR/onedrive
 OD_KEPT=diag-onedrive.json
-OD_APP=diag-onedrive.conf
+OD_APP=onedrive.config
 
 od_ready() { $OD ready; }
 od_who() { $OD whoami 2>/dev/null; }
@@ -326,7 +326,7 @@ od_stick() {   # source-or-"" name
 od_keep() { od_stick "$OD_STATE/token.json" "$OD_KEPT" && touch "$OD_STATE/kept"; }
 
 # OneDrive chosen, but this build has no app IDs (onedrive.conf empty, no
-# diag-onedrive.conf on the stick): the two IDs typed in once - they are on
+# onedrive.config on the stick): the two IDs typed in once - they are on
 # the app registration's Overview page - and kept on the stick for next
 # time. IDs, not secrets: the app is a public client, sign-in is the code.
 od_setup() {   # [again] - skip the first question: Microsoft just refused the IDs typed before

@@ -47,7 +47,7 @@ real machine on Ash's bench.
     amber.
   - The app's two IDs (Ash's registration in Data Dynamics' Entra ID; a
     public client - no secret) are in onedrive.conf, or in
-    diag-onedrive.conf on the stick, so no rebuild is needed when they
+    onedrive.config on the stick, so no rebuild is needed when they
     change.
   - Tests: test/fakegraph.py stands in for Microsoft (strict about upload
     fragments, the Authorization header, case; throttles, loses an answer,

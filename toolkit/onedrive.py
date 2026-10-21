@@ -70,7 +70,7 @@ RUN_DIR = os.environ.get("RUN_DIR", "/run/diag")
 STATE = os.path.join(RUN_DIR, "onedrive")
 # onedrive.conf beside this: CLIENT_ID, TENANT_ID - the app Ash registered -
 # and, for the VM harness only, LOGIN / GRAPH pointing at test/fakegraph.py.
-# The IDs can also come from diag-onedrive.conf on the boot stick (imglib.sh
+# The IDs can also come from onedrive.config on the boot stick (imglib.sh
 # copies it to STATE): no rebuild when the app is registered later. Only the
 # IDs are taken from the stick - never where the sign-in goes - and only
 # where the build has none: a stick with another tenant's app must not win
