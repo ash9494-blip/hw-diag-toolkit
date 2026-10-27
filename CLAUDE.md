@@ -5,8 +5,8 @@ Bootable USB/ISO for bench-testing laptops at Data Dynamics (Johor). Owner: Ash
 minimal Ubuntu live system straight into a full-screen tile menu of hardware
 tests, and writes a per-machine report to the USB stick.
 
-**Current version: 1.26.0** (`toolkit/lib.sh` → `DIAG_VERSION`).
-Last delivered ISO: 1.26.0, SHA256 `79f1babdaaf4efe20de5abe72c0216a1a74c5daa3c4e514dba6c64d196d06e91`
+**Current version: 1.26.1** (`toolkit/lib.sh` → `DIAG_VERSION`).
+Last delivered ISO: 1.26.1, SHA256 `870f0035f03fe5f891de6f5b718ad88ff3ba261f50de4766b4962ea65e141bab`
 (asks "USB or OneDrive" first; with no app IDs built in, choosing OneDrive
 asks for them on screen and keeps them in the stick's onedrive.config).
 Version history and the reasoning behind past changes: `docs/HISTORY.md`.
@@ -80,13 +80,17 @@ toolkit/            everything that ends up in /opt/diag on the image
                     Browse; verify (tests: test/mrimg_test.py, run by the build)
   vendor/quicklz131.c  QuickLZ 1.31 (GPL) - Macrium 8's compression; the build
                     compiles it to /opt/diag/lib/libqlz.so on the host
+  clock.sh          the clock: set from the internet (Date header of a plain
+                    web address) or by hand, written to the RTC; `watch` runs
+                    from boot and sets it whenever there is a connection
   onedrive.py       Ash's work OneDrive as an image store: device code sign-in
                     (code typed on his phone), Microsoft Graph over http.client
                     (kept-alive connections), find images (search + walk),
                     mount/sync/umount; onedrive.conf = the app's two IDs
                     (or onedrive.config on the stick)
   odfs.py           OneDrive as a folder (FUSE via python3-fusepy, fsname
-                    "onedrive"): 8 MB ranged reads + read-ahead; a file being
+                    "onedrive"): 512 KB ranged reads, 8 MB + read-ahead once
+                    a file is read 8 MB front to back; a file being
                     written is held in /dev/shm until closed (uploads need the
                     size up front) - small ones until .diag-sync (tests:
                     test/onedrive_test.py against test/fakegraph.py)
@@ -218,6 +222,10 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   partitions hold or give it (`od_places`) - a stranger's DIAGDATA stick
   must not bring its account; the build's app IDs win over the stick's; the
   backup confirm shows the account from a live `/me` (`whoami --live`).
+  Any OneDrive step a person waits on runs through `od_bg` (background,
+  progress from OD_PROGRESS, Q/Esc stops it): a page that reads no keys
+  looked hung to Ash, and the keys pressed meanwhile answered the pages
+  after it. onedrive.py exit 6 = the sign-in ended (offer to sign in again).
 - Report: `rsection`, `rsilent` → `/run/diag/report.txt`; one `RESULT:` line per
   test; `set_kv KEY value` → `summary.kv`.
 - Comments explain *why* (usually the bug that forced it). Keep that style.
@@ -316,7 +324,17 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   `/run/live/medium` - use `live_medium_dev`), and the
   partition holding the ISOs is locked (`mount /dev/sdb1` fails). Ventoy
   1.1.01+ maps that partition as a dm device named after it (`dm_named
-  sdb1`) - write through that, never the plain device.
+  sdb1`) - write through that, never the plain device. An older Ventoy does
+  not: `stick_part_dev` (lib.sh) then maps it itself as `diag-sdb1` (dm
+  linear over the whole partition) - Ash's onedrive.config on his DIAGDATA
+  was neither read nor kept before it (1.26).
+- hwclock is not in util-linux on noble but in util-linux-extra; a clock set
+  without it was lost at the next boot. The image's zone must be the bench's
+  (Asia/Kuala_Lumpur, finalize_chroot.sh) with /etc/adjtime LOCAL: on Etc/UTC
+  the RTC's local time passed for UTC, and writing a true time back would put
+  the customer's Windows 8 hours out. QEMU's RTC is UTC - test the clock with
+  `-rtc base=localtime`, as a Windows laptop keeps it. Time a watcher by /proc/uptime, not
+  by the clock it sets (a clock set back by years waited years).
 - Linux 7.0 (HWE) since 1.21; noble's 6.8 iwlwifi loads Intel firmware only
   up to API 86 and Panther Lake's (Z40L-P) starts at 101 - "firmware
   missing" with the file on the stick. 7.0 brought a VFIO "xe" directory
@@ -405,9 +423,23 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   `parentReference.path` (fetch the item) and search lags uploads by
   minutes. Names ignore case. Debian's fusepy module is `fusepy`, not
   `fuse`. A spool file must be unbuffered: `>>` appends at the size
-  getattr reported.
+  getattr reported. Read-ahead from a file's first byte made the image list
+  fetch 32 MB per image (it reads a header, then jumps to the tail) - big
+  blocks only after a long front-to-back run (`LONG_RUN`).
+- Two sessions sharing this checkout: a build of one version from HEAD plus
+  its own files leaves out the other's uncommitted helpers. 1.26's
+  `od_stopkey` called `tui_wait_key` (1.27's tui.sh) - undefined in the 1.26
+  build, so the search page spun without ever reading a key. Check new
+  calls against the tui.sh that ships (`git show HEAD:toolkit/tui.sh`).
 
 ## Open items
+
+- **1.26.1 on the bench** (VM against a slow fake Microsoft only): how long
+  Restore's OneDrive list takes on Ash's real tenant and office link (fake:
+  13 s for his eight images at 0.3 s a request); Esc / Q on the search page
+  on a real keyboard; Settings -> Date and time and the boot watcher on a
+  laptop with a flat CMOS cell; the DIAGDATA config read through Ventoy's
+  hold on his own stick (the VM faked the hold with a dm device).
 
 - **1.26.0 OneDrive on the real tenant** (tested only against
   test/fakegraph.py: unit tests, a real FUSE mount in WSL, imaging-loop.sh

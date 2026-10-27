@@ -3,6 +3,65 @@
 Newest first. Each entry says what changed and why; the "why" is usually a
 real machine on Ash's bench.
 
+## 1.26.1 — 2026-10-21
+Ash's first day with 1.26.0 on the bench.
+- **Date and time** (Ash: the OneDrive sign-in failed on a laptop whose
+  clock was wrong - "add a time adjustment in the toolkit, and let the date
+  and time auto sync if connect to internet"). `clock.sh`: Settings -> Date
+  and time sets the clock from the internet or by hand, and writes it to the
+  hardware clock (in local time, as Windows keeps it). A watcher started at
+  boot sets it from the internet whenever there is a connection (more than a
+  minute out). The time comes from the Date header of a plain web address -
+  HTTPS needs a right clock to work. OneDrive sets the clock before signing
+  in, and when Microsoft's certificate is still refused it offers the date
+  and time screen, then tries again. hwclock is in util-linux-extra on noble
+  (now installed and asserted by the build). The image's time zone is now
+  the bench's, Asia/Kuala_Lumpur: it was Etc/UTC, which only looked right
+  because the RTC's local time was taken for UTC - setting the true time and
+  writing it back would have left every customer's Windows 8 hours slow.
+- **The stick's DIAGDATA on Ventoy**: Ash's onedrive.config was not read and
+  the IDs he typed were "not kept on the stick". Ventoy holds the partition
+  its ISOs are on while one is booted (the plain device will not mount);
+  1.1.01 and later map it under its own name, an older Ventoy does not. The
+  toolkit now makes that mapping itself (`stick_part_dev` in lib.sh,
+  device-mapper linear over the whole partition, named diag-<part>) - the
+  settings kept on the stick go through it too.
+- **The OneDrive image list, fast and stoppable** (Ash: "i select 'Restore
+  image', the checking takes very long, and while im away, it go back to
+  image option page, when i want to quit by pressing esc button, it
+  hangs"). Measured on a slow fake Microsoft with Ash's eight Macrium
+  images: 135 s and 58 MB downloaded, now 13 s and 12 MB.
+  - Every image opened for its header got 8 MB blocks and three more
+    fetched ahead - 32 MB an image, and the next image's small reads queued
+    behind them. Big blocks now only once a file has been read 8 MB front to
+    back; a read never waits behind read-ahead (it fetches the piece itself),
+    and read-ahead for a closed file is dropped.
+  - The images are read several at once, and Microsoft's search runs while
+    the folders are listed.
+  - The search, "Opening OneDrive" and the wait for a sign-in code ran with
+    the page reading no keys: Esc did nothing, and the keys pressed meanwhile
+    answered the pages after it (the list's own menu, then Disk imaging).
+    Each now runs in the background on a page that shows how far it is and
+    stops on Q or Esc - so does sending a backup's last files. Leaving Disk
+    imaging says "Closing OneDrive..." and takes 30 s at most, whatever is
+    still waiting on Microsoft. The first build of this called a key
+    function that only exists in 1.27's tui.sh: the page spun without
+    reading a key (the VM caught it; the key wait is the renderer's own now).
+  - A dead link was six tries of up to a minute each; now a silent
+    connection is dropped after 30 s and given up on after 45 s (a restore's
+    or backup's own transfers keep trying for 3 minutes). A slow search no
+    longer fails the list - the folders are still read; a link that dies
+    while the images are read says so instead of listing each as "cannot
+    open: Input/output error".
+  - A sign-in Microsoft had ended made every look fail, each skipped as one
+    unreadable folder: "No images on OneDrive". It now says the sign-in
+    ended and offers to sign in again, and an unreadable top of the drive
+    says why.
+  - OneDrive asks the internet for the time before it opens only when it
+    has not had it in the last 5 minutes (a network blocking plain web
+    addresses cost every open up to 16 s), and moves the clock only when it
+    is more than a minute out.
+
 ## 1.26.0 — 2026-10-19
 - **OneDrive as a place for images** (Ash: "for image restore not only rely
   on usb, but also to search image on onedrive, and back up from there").

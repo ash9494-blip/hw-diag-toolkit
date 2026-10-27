@@ -32,7 +32,12 @@ then use it as they use a USB drive.
 Exit 1 is a failure with the reason on stderr; 3 is "Microsoft could not
 be reached" - no internet - for which the screen offers Wi-Fi; 4 is "the
 app IDs are wrong" (Microsoft knows no such app or tenant), for which it
-asks for them again.
+asks for them again; 5 is "the clock is wrong" (Microsoft's certificate
+refused), for which it offers to set the date and time; 6 is "the sign-in
+has run out or was withdrawn", for which it offers to sign in again.
+
+With OD_PROGRESS set, a long step (images) writes what it is doing there,
+one line at a time, for the screen that waits on it.
 """
 import errno
 import http.client
@@ -82,6 +87,7 @@ for _k, _v in _read_conf(os.path.join(STATE, "onedrive.conf"), ("CLIENT_ID", "TE
 GUID = re.compile(r"^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$")
 TENANT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$")       # a GUID, or contoso.onmicrosoft.com
 TOKEN = os.path.join(STATE, "token.json")
+LAST_ERROR = os.path.join(STATE, "last-error")   # odfs.py's last failure, in words
 LOG = os.path.join(RUN_DIR, "onedrive.log")
 LOGIN = os.environ.get("OD_LOGIN") or CONF.get("LOGIN") or "https://login.microsoftonline.com"
 GRAPH = os.environ.get("OD_GRAPH") or CONF.get("GRAPH") or "https://graph.microsoft.com/v1.0"
@@ -89,6 +95,15 @@ SCOPE = "Files.ReadWrite offline_access User.Read"
 UP_CHUNK = 32 * 320 * 1024       # 10 MiB: upload fragments are multiples of 320 KiB
 UP_SMALL = 4 * 1024 * 1024       # up to this a file goes up in one PUT
 RETRIES = 6
+# A dead link was six tries of a minute each before "cannot reach
+# Microsoft" (1.26: Ash's Restore list sat for minutes): a socket silent
+# for TIMEOUT s is dropped, and connections are retried for PATIENCE s. A
+# restore's or backup's own transfers wait longer (JOB_PATIENCE): an hour's
+# job should outlast Wi-Fi dropping for a minute.
+TIMEOUT = 30
+PATIENCE = 45
+JOB_PATIENCE = 180
+WORKERS = 6                      # images read at once for the list
 IMAGES_DIR = "/Disk images"      # where backups made here go
 SYNC_NAME = ".diag-sync"         # odfs.py: writing it uploads everything held
 FORM = {"Content-Type": "application/x-www-form-urlencoded"}
@@ -106,9 +121,25 @@ class Offline(GraphError):
     """Microsoft could not be reached at all: exit 3, and the screen offers Wi-Fi."""
 
 
+class ClockWrong(GraphError):
+    """Microsoft's certificate was refused - nearly always this laptop's
+    clock: exit 5, and the screen offers to set the date and time."""
+
+
 class AppRejected(GraphError):
     """Microsoft does not know the app or the tenant - the IDs are wrong
     (typed in once on a bench laptop): exit 4, and the screen asks again."""
+
+
+class SignedOut(GraphError):
+    """No sign-in, or Microsoft ended it (90 days unused, revoked, the
+    password changed): exit 6, and the screen offers to sign in again."""
+
+
+# failures that end a search outright: one folder that cannot be read is
+# skipped, but these say every other one will fail too - and "no images"
+# would hide them (1.26: "No images on OneDrive" with the sign-in gone)
+FATAL = (Offline, ClockWrong, SignedOut)
 
 
 # AADSTS700016 app not found in the directory, 90002 tenant not found,
@@ -121,6 +152,18 @@ def log(text):
         os.makedirs(RUN_DIR, exist_ok=True)
         with open(LOG, "a") as f:
             f.write("%s %s\n" % (time.strftime("%H:%M:%S"), text))
+    except OSError:
+        pass
+
+
+def progress(text):
+    """A line for the screen waiting on this (OD_PROGRESS), if there is one."""
+    path = os.environ.get("OD_PROGRESS")
+    if not path:
+        return
+    try:
+        with open(path, "a") as f:
+            f.write(re.sub(r"[\x00-\x1f]", " ", text) + "\n")
     except OSError:
         pass
 
@@ -171,7 +214,7 @@ def _conn(scheme, host, timeout, fresh=False):
     return c
 
 
-def _http(method, url, data=None, headers=None, timeout=60):
+def _http(method, url, data=None, headers=None, timeout=TIMEOUT):
     """One request: (status, headers, body); an HTTP error is a status here.
     A connection the far end closed while idle is opened again, once."""
     u = urllib.parse.urlsplit(url)
@@ -197,11 +240,15 @@ def _http(method, url, data=None, headers=None, timeout=60):
     raise ConnectionError("no connection")
 
 
-def call(method, url, data=None, headers=None, ok=(200, 201, 202, 204, 206), auth=None, timeout=60):
+def call(method, url, data=None, headers=None, ok=(200, 201, 202, 204, 206), auth=None, timeout=TIMEOUT,
+         patience=PATIENCE):
     """A request with retries - throttling (429/503 with Retry-After), a
     server hiccup, a dropped connection: a bench's Wi-Fi is not a data
     centre. Anything else is a GraphError with Microsoft's message."""
-    delay, refreshed = 2.0, False
+    delay, refreshed, started = 2.0, False, time.time()
+    # refused outright: a firewall or proxy saying no, not a link that comes
+    # back - say so now, where a person is waiting on the answer
+    final = (errno.ENETUNREACH, errno.EHOSTUNREACH) + ((errno.ECONNREFUSED,) if patience <= PATIENCE else ())
     for attempt in range(RETRIES):
         h = dict(headers or {})
         if auth is not None:
@@ -212,13 +259,14 @@ def call(method, url, data=None, headers=None, ok=(200, 201, 202, 204, 206), aut
             # nearly always this laptop's clock (a flat CMOS battery), not the
             # network: trying again, or offering Wi-Fi, would not help
             log("%s %s: %s" % (method, url.split("?")[0][:120], exc))
-            raise GraphError("Microsoft's certificate was not accepted - is this laptop's date and time right? (%s)"
+            raise ClockWrong("Microsoft's certificate was not accepted - is this laptop's date and time right? (%s)"
                              % time.strftime("%Y-%m-%d"))
         except (OSError, http.client.HTTPException) as exc:     # socket.timeout and ssl errors are OSErrors
             log("%s %s: %s" % (method, url.split("?")[0][:120], exc))   # no query: download links carry a key
             # no network at all: say so now - six tries sat a minute on
             # "Asking Microsoft..." before the Wi-Fi page was offered (VM)
-            if attempt == RETRIES - 1 or getattr(exc, "errno", None) in (errno.ENETUNREACH, errno.EHOSTUNREACH):
+            if attempt == RETRIES - 1 or getattr(exc, "errno", None) in final \
+                    or time.time() + delay - started > patience:
                 raise Offline("cannot reach Microsoft (%s) - is this laptop on the internet?" % exc)
             time.sleep(delay)
             delay = min(delay * 2, 30)
@@ -249,6 +297,9 @@ class Auth:
     def __init__(self, path=None, conf=None):
         self.path, self.conf = path or TOKEN, conf or config()
         self.lock = threading.RLock()
+        # why there is no sign-in: the image list's other threads asked after
+        # the first had heard Microsoft end it, and said only "not signed in"
+        self.why = "not signed in to OneDrive"
         try:
             with open(self.path) as f:
                 self.tok = json.load(f)
@@ -327,7 +378,7 @@ class Auth:
 
     def _refresh(self):
         if not self.signed_in():
-            raise GraphError("not signed in to OneDrive")
+            raise SignedOut(self.why)
         form =urllib.parse.urlencode({"client_id": self.conf["client"], "scope": SCOPE,
                                        "grant_type": "refresh_token",
                                        "refresh_token": self.tok["refresh_token"]}).encode()
@@ -337,7 +388,8 @@ class Auth:
             if exc.status in (400, 401):
                 # revoked, expired (90 days unused) or the password changed
                 self.forget()
-                raise GraphError("the OneDrive sign-in has run out or was withdrawn - sign in again", exc.status)
+                self.why = "the OneDrive sign-in has run out or was withdrawn - sign in again"
+                raise SignedOut(self.why, exc.status)
             raise
         self._take(json.loads(body))
 
@@ -423,7 +475,7 @@ class Drive:
                 item["@microsoft.graph.downloadUrl"] = url = fresh.get("@microsoft.graph.downloadUrl")
             try:
                 status, _, body = call("GET", url, headers={"Range": "bytes=%d-%d" % (off, off + n - 1)},
-                                       ok=(200, 206))
+                                       ok=(200, 206), patience=JOB_PATIENCE)
             except GraphError as exc:
                 if exc.status in (401, 403, 404) and not attempt:
                     continue
@@ -470,7 +522,8 @@ class Drive:
             if len(data) != size:
                 raise GraphError("%s: only %d of %d bytes could be read here" % (path, len(data), size))
             _, _, body = call("PUT", self._url(path) + "/content", data,
-                              {"Content-Type": "application/octet-stream"}, ok=(200, 201), auth=self.auth)
+                              {"Content-Type": "application/octet-stream"}, ok=(200, 201), auth=self.auth,
+                              timeout=60, patience=JOB_PATIENCE)
             return json.loads(body)
         data = json.dumps({"item": {"@microsoft.graph.conflictBehavior": "replace"}}).encode()
         _, _, body = call("POST", self._url(path) + "/createUploadSession", data,
@@ -483,10 +536,12 @@ class Drive:
             if not chunk:
                 raise GraphError("%s: only %d of %d bytes could be read here" % (path, off, size))
             try:
-                # the upload URL carries its own permission: no Authorization header
+                # the upload URL carries its own permission: no Authorization
+                # header. OneDrive can take a while to answer the last
+                # fragment (it puts the file together): 60 s, not TIMEOUT
                 status, _, body = call("PUT", up, chunk, {"Content-Range": "bytes %d-%d/%d"
                                                           % (off, off + len(chunk) - 1, size)},
-                                       ok=(200, 201, 202))
+                                       ok=(200, 201, 202), timeout=60, patience=JOB_PATIENCE)
             except GraphError as exc:
                 if exc.status != 416:
                     raise
@@ -495,7 +550,7 @@ class Drive:
                 return json.loads(body)
             nxt = json.loads(body).get("nextExpectedRanges") if body else None
             if not nxt:
-                _, _, sb = call("GET", up, ok=(200,))
+                _, _, sb = call("GET", up, ok=(200,), patience=JOB_PATIENCE)
                 nxt = json.loads(sb).get("nextExpectedRanges") or ["%d-" % (off + len(chunk))]
             off = int(nxt[0].split("-")[0])
         raise GraphError("OneDrive did not finish the upload of %s" % path)
@@ -513,6 +568,8 @@ def _parent_path(drive, item):
         try:
             p = (drive._get("/me/drive/items/%s?$select=id,name,parentReference" % item["id"])
                  .get("parentReference") or {}).get("path")
+        except FATAL:
+            raise
         except GraphError as exc:
             log("where is %s: %s" % (item.get("name"), exc))
     if p is None or "root:" not in p:
@@ -537,7 +594,10 @@ def find_images(drive):
     behind an upload and it does not split every name into words the same
     way - so the top of the drive, each folder in it (Clonezilla users keep
     images in partimag/) and every folder in "Disk images" are also read
-    directly, as imgfmt.find_images reads a USB drive."""
+    directly, as imgfmt.find_images reads a USB drive. All at once, not one
+    after another: on a slow link each question costs a second or more.
+    A folder or a search that fails is skipped; a failure that dooms the
+    rest (FATAL, or the top of the drive unreadable) is raised."""
     found = set()
 
     def consider(folder, kids):
@@ -550,28 +610,38 @@ def find_images(drive):
     def listing(path):
         try:
             return drive.children(path)
+        except FATAL:
+            raise
         except GraphError as exc:
             log("list %s: %s" % (path, exc))
             return []
 
-    for text in ("mrimg", "clonezilla-img"):
+    def search(text):
+        # Microsoft's search is the one slow question here (a big drive): one
+        # that times out costs its hits, not the list - a link that is really
+        # down fails the top of the drive's listing anyway (review, 1.26)
         try:
             hits = drive.search(text)
+        except (ClockWrong, SignedOut):
+            raise
         except GraphError as exc:
             log("search %s: %s" % (text, exc))
-            hits = []
-        for it in hits:
-            name = it.get("name", "")
-            if "file" not in it or not (_first_piece(name) or name == "clonezilla-img"):
-                continue
-            parent = _parent_path(drive, it)
-            if parent is None:
-                continue
-            found.add((parent or "/") if name == "clonezilla-img" else parent + "/" + name)
-    top = listing("/")
-    consider("/", top)
-    folders = ["/" + k["name"] for k in top if "folder" in k]
+            return []
+        return [it for it in hits if "file" in it
+                and (_first_piece(it.get("name", "")) or it.get("name") == "clonezilla-img")]
+
+    def place(it):
+        parent = _parent_path(drive, it)
+        if parent is None:
+            return None
+        return (parent or "/") if it["name"] == "clonezilla-img" else parent + "/" + it["name"]
+
     with ThreadPoolExecutor(8) as pool:
+        searches = [pool.submit(search, t) for t in ("mrimg", "clonezilla-img")]
+        top = drive.children("/")
+        consider("/", top)
+        folders = ["/" + k["name"] for k in top if "folder" in k]
+        progress("Looking in the folders at the top: %d" % len(folders))
         lists = dict(zip(folders, pool.map(listing, folders)))
         for path, kids in lists.items():
             consider(path, kids)
@@ -579,6 +649,9 @@ def find_images(drive):
         subs = [m + "/" + k["name"] for m in mine for k in lists[m] if "folder" in k]
         for path, kids in zip(subs, pool.map(listing, subs)):
             consider(path, kids)
+        progress("Waiting for OneDrive's search...")
+        hits = [it for s in searches for it in s.result()]
+        found.update(p for p in pool.map(place, hits) if p is not None)
     return sorted(found)
 
 
@@ -638,6 +711,46 @@ def umount(mnt):
     subprocess.run(["umount", "-l", mnt], capture_output=True)
 
 
+def images(mnt):
+    """The picker's lines: every image found, each opened through the
+    mounted folder for its date, machine and size - several at once (each
+    is a few small downloads, mostly waiting on Microsoft)."""
+    sys.path.insert(0, HERE)
+    import imgengine
+    progress("Searching OneDrive for disk images...")
+    started = time.time()
+    paths = find_images(Drive(Auth()))
+    done, mu = [0], threading.Lock()
+
+    def line(path):
+        try:
+            out = imgengine.image_line(mnt.rstrip("/") + path)
+        except (OSError, ValueError) as exc:
+            log("images %s: %s" % (path, exc))
+            out = None
+        with mu:
+            done[0] += 1
+            progress("Reading the images found: %d of %d" % (done[0], len(paths)))
+        return out
+
+    if paths:
+        progress("Reading the images found: 0 of %d" % len(paths))
+    with ThreadPoolExecutor(WORKERS) as pool:
+        lines = [out for out in pool.map(line, paths) if out]
+    # the link died after the search: each image's read failed in odfs.py
+    # and came back as "cannot open: Input/output error" - say what it was
+    try:
+        if os.path.getmtime(LAST_ERROR) >= started:
+            with open(LAST_ERROR) as f:
+                why = f.read().strip()
+            if why.startswith("cannot reach Microsoft"):
+                raise Offline(why)
+    except OSError:
+        pass
+    for out in lines:
+        print(out)
+
+
 def _remember_user(auth):
     me = Drive(auth).me()
     name = "%s <%s>" % (me.get("displayName", ""), me.get("userPrincipalName", ""))
@@ -674,13 +787,7 @@ def main(argv):
         elif cmd == "umount":
             umount(args[0])
         elif cmd == "images":
-            sys.path.insert(0, HERE)
-            import imgengine
-            for path in find_images(Drive(Auth())):
-                try:
-                    print(imgengine.image_line(args[0].rstrip("/") + path))
-                except (OSError, ValueError) as exc:
-                    log("images %s: %s" % (path, exc))
+            images(args[0])
         elif cmd == "ready":
             return 0 if config()["client"] else 1
         else:
@@ -689,7 +796,8 @@ def main(argv):
     except GraphError as exc:
         log("%s: %s" % (cmd, exc))
         print(exc, file=sys.stderr)
-        return 3 if isinstance(exc, Offline) else 4 if isinstance(exc, AppRejected) else 1
+        return 3 if isinstance(exc, Offline) else 4 if isinstance(exc, AppRejected) \
+            else 5 if isinstance(exc, ClockWrong) else 6 if isinstance(exc, SignedOut) else 1
     except OSError as exc:
         print("OneDrive: %s" % exc, file=sys.stderr)
         return 1

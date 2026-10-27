@@ -16,7 +16,7 @@
 # needs silencing here.
 exec 8>&-
 
-DIAG_VERSION="1.26.0"
+DIAG_VERSION="1.26.1"
 RUN_DIR=/run/diag
 REPORT_TXT="$RUN_DIR/report.txt"
 SUMMARY_KV="$RUN_DIR/summary.kv"
@@ -461,6 +461,25 @@ dm_named() {   # name -> /dev/dm-N of the device-mapper device called that
   return 1
 }
 
+# A partition as a device that will mount. Ventoy holds the partition its
+# ISOs are on while one is booted, so the plain device will not mount (the
+# kernel says busy). Ventoy 1.1.01 and later also map the whole partition
+# under its own name - its documented way back in. An older Ventoy does not:
+# then the toolkit makes the same mapping itself (device-mapper, linear over
+# the whole partition, named diag-<part>) - Ash's onedrive.config on his
+# stick was neither read nor kept, and the IDs were asked for every boot (1.26).
+stick_part_dev() {   # /dev/sdb1 -> /dev/sdb1, or the /dev/dm-N that maps it
+  local p=$1 n=${1##*/} d
+  ls "/sys/class/block/$n/holders/" 2>/dev/null | grep -q . || { printf '%s\n' "$p"; return 0; }
+  d=$(dm_named "$n") && [ "$(blockdev --getro "$d" 2>/dev/null)" = 0 ] && { printf '%s\n' "$d"; return 0; }
+  d=$(dm_named "diag-$n") && { printf '%s\n' "$d"; return 0; }
+  if dmsetup create "diag-$n" --table "0 $(blockdev --getsz "$p") linear $p 0" 2>>"$RUN_DIR/settings.log"; then
+    udevadm settle -t 5 2>/dev/null
+    d=$(dm_named "diag-$n") && { echo "mapped $p as $d (held by $(ls "/sys/class/block/$n/holders/" | tr '\n' ' '))" >> "$RUN_DIR/settings.log"; printf '%s\n' "$d"; return 0; }
+  fi
+  printf '%s\n' "$p"
+}
+
 stick_parts() {   # disk -> its partitions a file can be written to, one per line
   local p t fs label pt
   lsblk -lnpo NAME,TYPE "/dev/$1" 2>/dev/null | while read -r p t; do
@@ -472,17 +491,14 @@ stick_parts() {   # disk -> its partitions a file can be written to, one per lin
     pt=$(lsblk -dno PARTTYPE "$p" 2>/dev/null | tr -d ' ')
     [ "$label" = VTOYEFI ] && continue
     case "$pt" in c12a7328-f81f-11d2-ba4b-00a0c93ec93b|0xef) continue ;; esac
-    # Ventoy holds the partition its ISOs are on while one is booted, so
-    # the plain device will not mount. Ventoy 1.1.01 and later also map the
-    # whole partition under its own name - its documented way back in.
-    dm_named "${p##*/}" || printf '%s\n' "$p"
+    stick_part_dev "$p"
   done
 }
 
 settings_places() {   # where the settings may be kept, best first, one per line
   local disk
   {
-    blkid -L DIAGDATA 2>/dev/null
+    disk=$(blkid -L DIAGDATA 2>/dev/null) && stick_part_dev "$disk"
     disk=$(boot_stick_disk) || exit 0
     stick_parts "$disk"
   } | awk 'NF && !seen[$0]++'

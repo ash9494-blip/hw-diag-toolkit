@@ -58,6 +58,12 @@ chroot $C apt-get install -y --no-install-recommends python3-fusepy libfuse2t64 
 chroot $C python3 -c "import fusepy" 2>/tmp/fusepy.err \
   || { echo "BUILD ABORTED - python3-fusepy does not load in the image: $(tail -1 /tmp/fusepy.err)" >&2; exit 1; }
 echo "OneDrive folder support present: fusepy + libfuse2"
+# The clock (clock.sh): set from the internet or by hand, then written to the
+# hardware clock with hwclock - on noble that is in util-linux-extra, not
+# util-linux. Without it a time set here was lost at the next boot.
+chroot $C apt-get install -y --no-install-recommends util-linux-extra 2>&1 | tail -1
+chroot $C sh -c "command -v hwclock" >/dev/null 2>&1 \
+  || { echo "BUILD ABORTED - hwclock did not install into the image" >&2; exit 1; }
 
 # The touchpad driver chain. All of it ships in linux-modules(-extra); this is
 # here so a future trim can never quietly take a link out - a missing one
@@ -381,6 +387,15 @@ echo "sound: snd_hda_core gpu_bind=0 (Intel sound does not wait for the absent i
 # once Wi-Fi let timesyncd set the true time, the kernel would write UTC back
 # into the RTC - leaving the customer's Windows clock 8 hours out.
 printf '0.0 0 0.0\n0\nLOCAL\n' > $C/etc/adjtime
+# ... and local means the bench's zone (Johor, UTC+8). The image was left on
+# Etc/UTC, which only looked right while nothing set the clock: the RTC's
+# local time was taken for UTC. Once clock.sh set the true UTC from the
+# internet (1.26), hwclock wrote that UTC back as "local" - every laptop that
+# went online would have come back to Windows 8 hours slow.
+ln -sf /usr/share/zoneinfo/Asia/Kuala_Lumpur $C/etc/localtime
+echo Asia/Kuala_Lumpur > $C/etc/timezone
+[ -f $C/usr/share/zoneinfo/Asia/Kuala_Lumpur ] \
+  || { echo "BUILD ABORTED - the bench's time zone (Asia/Kuala_Lumpur) is not in the image" >&2; exit 1; }
 echo "diagtool" > $C/etc/hostname
 cat > $C/etc/hosts <<'EOF'
 127.0.0.1 localhost diagtool

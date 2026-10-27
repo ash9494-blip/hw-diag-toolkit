@@ -3,9 +3,12 @@
 onedrive.py mount. Restore, Check, Browse and Back up then work on it the
 way they work on a USB drive - no OneDrive code in the imaging engine.
 
-Reading: 8 MB ranged downloads, kept in a small cache, with the next few
-fetched ahead while a file is read front to back (a restore is one long
-read; a single stream from OneDrive is far slower than the bench's LAN).
+Reading: ranged downloads kept in a small cache - 512 KB pieces, and once
+a file has been read 8 MB front to back, 8 MB blocks with the next few
+fetched ahead (a restore is one long read; a single stream from OneDrive is
+far slower than the bench's LAN). Not from the first byte: the image list
+opens every image for its header and jumps to its tail, and 32 MB fetched
+ahead for each of Ash's eight images made the list take minutes (1.26).
 
 Writing: OneDrive takes a file whole - an upload has to say its size up
 front - so a file being written is held in RAM (/dev/shm) until it is
@@ -25,7 +28,7 @@ import tempfile
 import threading
 import time
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -38,7 +41,8 @@ except ImportError:
     from fuse import FUSE, FuseOSError, Operations
 
 BLOCK = 8 * 1024 * 1024      # a reader going front to back
-SMALL = 512 * 1024           # a look somewhere else in a file
+SMALL = 512 * 1024           # a look at a header, an index, a small file
+LONG_RUN = BLOCK             # read this far front to back: BLOCKs from then on
 AHEAD = 3                    # blocks fetched ahead of a reader going front to back
 CACHE_BYTES = 96 * 1024 * 1024
 WORKERS = 4
@@ -47,7 +51,7 @@ MISS_AGAIN = 3               # ... or after this, when a name is not in it
 UP_NOW = 16 * 1024 * 1024    # a closed file this big goes up at once; smaller ones wait for sync
 SPOOL = os.environ.get("OD_SPOOL", "/dev/shm")
 SPOOL_MAX = int(os.environ.get("OD_SPOOL_MAX", 1536 * 1024 * 1024))
-LAST_ERROR = os.path.join(od.STATE, "last-error")
+LAST_ERROR = od.LAST_ERROR
 MARKERS = ("clonezilla-img", "image.json")   # uploaded last by sync
 
 
@@ -120,7 +124,8 @@ def _spool_max():
 class Handle:
     def __init__(self, path, item=None, spool=None, sync=False):
         self.path, self.item, self.spool, self.sync = path, item, spool, sync
-        self.pos = 0                            # where the last read ended
+        self.pos = 0                            # how far this reader has got
+        self.run = 0                            # bytes read front to back up to there
 
 
 class OneDriveFS(Operations):
@@ -412,16 +417,21 @@ class OneDriveFS(Operations):
         end = min(offset + size, total)
         if offset >= end:
             return b""
-        # near where this reader was (the kernel's read-ahead can come a
-        # little out of order): a long read, in big blocks with more on the
-        # way. Anywhere else - a Macrium image's tail and index - a small one.
-        seq = abs(offset - h.pos) <= BLOCK
-        unit = BLOCK if seq else SMALL
+        # near where this reader got to (the kernel's read-ahead can come a
+        # little out of order), new ground adds to its run - reading the same
+        # bytes again does not. A long run is a restore or a check: big
+        # blocks, more on the way. Anything else - an image's header, a
+        # Macrium image's tail and index - small pieces, none ahead.
+        if abs(offset - h.pos) <= BLOCK:
+            h.run += max(0, end - h.pos)
+            h.pos = max(h.pos, end)
+        else:
+            h.run, h.pos = 0, end
+        unit = BLOCK if h.run >= LONG_RUN else SMALL
         first, last = offset // unit, (end - 1) // unit
-        if seq:
+        if unit == BLOCK:
             for n in range(last + 1, min(last + 1 + AHEAD, (total - 1) // unit + 1)):
-                self._fetch(h.item, unit, n)
-        h.pos = end
+                self._prefetch(h.item, unit, n)
         out = b"".join(self._block(h.item, unit, n) for n in range(first, last + 1))
         start = offset - first * unit
         return out[start:start + (end - offset)]
@@ -432,18 +442,22 @@ class OneDriveFS(Operations):
         # a check after a second backup must not read the first one's bytes
         return (item["id"], item.get("cTag") or item.get("eTag") or item.get("size"), unit, n)
 
-    def _fetch(self, item, unit, n):
-        """The block's download under way (a Future), or None when it is
-        already in the cache."""
+    def _prefetch(self, item, unit, n):
+        """The block on its way in the background, unless it is here or coming."""
         key = self._key(item, unit, n)
         with self.mu:
-            if key in self.blocks:
-                self.blocks.move_to_end(key)
-                return None
-            fut = self.pending.get(key)
-            if fut is None:
-                fut = self.pending[key] = self.pool.submit(self._download, item, unit, n)
-        return fut
+            if key not in self.blocks and key not in self.pending:
+                self.pending[key] = self.pool.submit(self._download, item, unit, n)
+
+    def _unfetch(self, item_id):
+        """Read-ahead still queued for a file nobody reads any more: the
+        image list closes one image and opens the next."""
+        with self.mu:
+            if any(o.item is not None and o.item["id"] == item_id for o in self.handles.values()):
+                return
+            for key, fut in list(self.pending.items()):
+                if key[0] == item_id and fut.cancel():
+                    del self.pending[key]
 
     def _download(self, item, unit, n):
         key = self._key(item, unit, n)
@@ -464,19 +478,34 @@ class OneDriveFS(Operations):
                 self.pending.pop(key, None)
 
     def _block(self, item, unit, n):
-        for _ in range(3):
-            fut = self._fetch(item, unit, n)
-            if fut is not None:
-                try:
-                    return fut.result()
-                except od.GraphError as exc:
-                    raise _fail(exc)
-            with self.mu:
-                data = self.blocks.get(self._key(item, unit, n))
+        """The block: from the cache, from its download under way, or
+        fetched here and now - never queued behind read-ahead (a look at one
+        image waited for 32 MB fetched ahead for the ones before it). The
+        kernel asks for one block in several pieces at once: one download."""
+        key = self._key(item, unit, n)
+        mine = None
+        with self.mu:
+            data = self.blocks.get(key)
             if data is not None:
+                self.blocks.move_to_end(key)
                 return data
-            # pushed out of the cache between the two looks: fetch it again
-        raise _fail(od.GraphError("the download cache is too small for this many readers"))
+            fut = self.pending.get(key)
+            if fut is not None and fut.cancel():      # read-ahead not started yet: it is wanted now
+                fut = None
+            if fut is None:
+                fut = mine = self.pending[key] = Future()
+                mine.set_running_or_notify_cancel()     # another reader must wait for it, not cancel it
+        if mine is not None:
+            try:
+                mine.set_result(self._download(item, unit, n))
+            except BaseException as exc:                # every reader waiting on it must hear
+                mine.set_exception(exc)
+        try:
+            return fut.result()
+        except od.GraphError as exc:
+            raise _fail(exc)
+        except (OSError, ValueError) as exc:
+            raise _fail(od.GraphError(str(exc)))
 
     # ------------------------------------------------------------ going up
     def _upload(self, sp):
@@ -521,6 +550,8 @@ class OneDriveFS(Operations):
     def release(self, path, fh):
         with self.mu:
             h = self.handles.pop(fh, None)
+        if h is not None and h.item is not None:
+            self._unfetch(h.item["id"])
         sp = h.spool if h else None
         if sp is None:
             return 0
@@ -537,7 +568,7 @@ class OneDriveFS(Operations):
             self.sync_all()
         except FuseOSError as exc:
             od.log("odfs: files not uploaded at unmount: %s" % exc)
-        self.pool.shutdown(wait=False)
+        self.pool.shutdown(wait=False, cancel_futures=True)
 
 
 def main():

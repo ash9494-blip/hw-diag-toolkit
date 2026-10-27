@@ -264,6 +264,7 @@ while :; do
     "Opening menu|$(cat "$RUN_DIR/layout" 2>/dev/null || echo compact)" \
     "Wireless test length|$(secs_ms "$(get wifi_secs 600)")" \
     "Disk benchmark size|$(get disk_size 1G)" \
+    "Date and time|$(date '+%d %b %Y, %H:%M') - set from the internet or by hand" \
     "Keep settings on the USB stick|done after every change - this shows where" \
     "About this toolkit|version, kernel, uptime" \
     "Reset everything|back to defaults" || break
@@ -275,8 +276,9 @@ while :; do
     5) set_layout_default ;;
     6) set_wifi_default ;;
     7) set_disk_default ;;
-    8) show_kept ;;
-    9) show_about ;;
-    10) reset_all ;;
+    8) /opt/diag/clock.sh screen ;;
+    9) show_kept ;;
+    10) show_about ;;
+    11) reset_all ;;
   esac
 done

@@ -62,6 +62,10 @@ if [ ! -f "$RUN_DIR/.seeded" ]; then
     v=$(setting_get layout "")
     [ -n "$v" ] && printf '%s\n' "$v" > "$RUN_DIR/layout"
   fi
+  # The clock, set from the internet whenever there is a connection (Ash,
+  # 1.26: OneDrive's sign-in failed on a laptop whose clock was wrong). fd 8
+  # closed: a daemon holding the menu's lock stops the menu restarting.
+  setsid /opt/diag/clock.sh watch 8>&- </dev/null >/dev/null 2>&1 &
   NEW_BOOT=1
 fi
 

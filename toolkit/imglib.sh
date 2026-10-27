@@ -197,13 +197,13 @@ store_mount() {   # [ro]
 
 pick_image() {   # sets IMAGE (a folder on the mounted store)
   local p saved machine size drive rc
-  local -a paths=() labels=() lister=($ENG list-images "$STORAGE_MNT")
+  local -a paths=() labels=()
   if [ "$STORAGE_DEV" = onedrive ]; then
-    # Microsoft's search finds them anywhere on the drive, not just at the top
-    lister=($OD images "$STORAGE_MNT")
-    tui_frame "Looking on OneDrive" ""; tui_line 6 "Searching OneDrive for disk images..." muted; tui_flush
+    od_images || return 1
+    rc=0
+  else
+    $ENG list-images "$STORAGE_MNT" > "$W/images.txt" 2>"$W/images.err"; rc=$?
   fi
-  "${lister[@]}" > "$W/images.txt" 2>"$W/images.err"; rc=$?
   cat "$W/images.err" >> "$W/engine.out"
   while IFS='|' read -r p saved machine size drive; do
     [ ${#machine} -gt 44 ] && machine="${machine:0:42}..."
@@ -246,6 +246,82 @@ OD_APP=onedrive.config
 
 od_ready() { $OD ready; }
 od_who() { $OD whoami 2>/dev/null; }
+
+# Q or Esc within $1 s - Esc is what Ash pressed, and tui_wait_abort takes Q
+# only. The renderer's key wait itself: 1.26's tui.sh has no call that names
+# the key (a tui_wait_key that came later was undefined here, and the page
+# spun without ever reading one - VM). The text screens take Q.
+od_stopkey() {
+  [ -n "$TUI_GUI" ] || { tui_wait_abort "$1"; return; }
+  _ask waitkey "$1"
+  case $UI_ANS in q|Q|esc) return 0 ;; esac
+  return 1
+}
+
+# A OneDrive step in the background, on a page that says what it is doing
+# and stops it on Q / Esc. Ash (1.26) left the Restore list searching, came
+# back, and the toolkit would not answer Esc: on a slow link one step can
+# take minutes, and a page that reads no keys looks hung - the keys pressed
+# meanwhile then answered the pages after it. onedrive.py writes its
+# progress to OD_PROGRESS; a shell function runs in a subshell, so its own
+# children are stopped too. 130 = stopped.
+od_bg() {   # title text out err command...
+  local title=$1 text=$2 out=$3 err=$4 pid start msg secs
+  shift 4
+  : > "$W/od.progress"
+  OD_PROGRESS=$W/od.progress "$@" > "$out" 2> "$err" &
+  pid=$!; start=$(date +%s)
+  tui_frame "$title" "Q = stop"
+  while kill -0 "$pid" 2>/dev/null; do
+    msg=$(tail -1 "$W/od.progress" 2>/dev/null)
+    tui_line 6 "${msg:-$text}" muted
+    secs=$(( $(date +%s) - start ))
+    [ "$secs" -ge 5 ] && tui_kv 8 "Time" "$(secs_ms "$secs")" muted
+    tui_flush
+    od_stopkey 1 && { od_kill "$pid"; return 130; }
+  done
+  wait "$pid"
+}
+
+# A background step and the commands it started. Held still first: a
+# subshell told to stop after its children could start the next one in
+# between (od_open's mount after its clock check); TERM waits for the CONT.
+# Waited for 3 s at most: one inside a call to the OneDrive folder that
+# odfs.py has already taken (a close that uploads) cannot die before
+# odfs.py answers it - the page goes on, and it ends by itself.
+od_kill() {
+  local i
+  kill -STOP "$1" 2>/dev/null
+  pkill -TERM -P "$1" 2>/dev/null
+  kill -TERM "$1" 2>/dev/null; kill -CONT "$1" 2>/dev/null
+  for i in $(seq 30); do kill -0 "$1" 2>/dev/null || break; sleep 0.1; done
+  kill -0 "$1" 2>/dev/null || wait "$1" 2>/dev/null
+  return 0
+}
+
+# The image list on OneDrive (pick_image) -> $W/images.txt; 0 = listed.
+# Microsoft's search finds images anywhere on the drive, not just at the top.
+od_images() {
+  local rc
+  while :; do
+    od_bg "Looking on OneDrive" "Searching OneDrive for disk images..." "$W/images.txt" "$W/images.err" \
+      $OD images "$STORAGE_MNT"
+    rc=$?
+    case $rc in
+      0) return 0 ;;
+      130) return 1 ;;
+      3) cp "$W/images.err" "$W/od.err"; od_online && continue; return 1 ;;
+      5) cp "$W/images.err" "$W/od.err"; od_clock && continue; return 1 ;;
+      6) # Microsoft ended the sign-in: the open folder holds the old one too
+         od_umount
+         tui_confirm "Sign in again" yes "$(tail -1 "$W/images.err")" "" "Sign in to OneDrive again now?" \
+           && od_mount && continue
+         return 1 ;;
+    esac
+    say_wrapped "Cannot look on OneDrive" "$(tail -1 "$W/images.err")"
+    return 1
+  done
+}
 
 # Where the sign-in may be kept: partitions of the boot stick itself (its
 # DIAGDATA too), never another stick's - a stranger's DIAGDATA stick holding
@@ -381,6 +457,15 @@ od_online() {
   have_route
 }
 
+# Microsoft's certificate was refused (onedrive.py exit 5): the laptop's
+# clock. The date and time screen (clock.sh), then try again. 0 = try again.
+od_clock() {
+  tui_confirm "The laptop's clock is wrong" yes "$(tail -1 "$W/od.err")" "" \
+    "Secure sites refuse a clock this far out. Set the date and time now?" || return 1
+  /opt/diag/clock.sh screen
+  return 0
+}
+
 # The device code sign-in: Microsoft gives a short code, Ash types it at
 # microsoft.com/devicelogin on his phone and approves there; this page only
 # waits. 0 once signed in.
@@ -389,16 +474,18 @@ od_signin() {
   OD_UNKEPT=""
   od_routed || od_online || return 1
   while :; do
-    tui_frame "Sign in to OneDrive" ""; tui_line 6 "Asking Microsoft for a sign-in code..." muted; tui_flush
+    tui_frame "Sign in to OneDrive" "Q = stop"; tui_line 6 "Asking Microsoft for a sign-in code..." muted; tui_flush
     : > "$W/od.code"; : > "$W/od.err"
-    $OD signin > "$W/od.code" 2> "$W/od.err" &
+    # the clock first: with it wrong Microsoft's certificate is refused
+    # (a flat CMOS cell) - the watcher may not have run yet on this connection
+    { /opt/diag/clock.sh sync >/dev/null 2>&1; exec $OD signin; } > "$W/od.code" 2> "$W/od.err" &
     pid=$!
     code=""
-    for _ in $(seq 400); do                   # the code, or the reason there is none
+    while :; do                               # the code, or the reason there is none
       IFS='|' read -r code url mins < "$W/od.code"
       [ -n "$code" ] && break
       kill -0 "$pid" 2>/dev/null || break
-      sleep 0.1
+      od_stopkey 0.2 && { od_kill "$pid"; return 1; }
     done
     if [ -n "$code" ]; then
       tui_frame "Sign in to OneDrive" "Q = cancel"
@@ -409,7 +496,7 @@ od_signin() {
       tui_line "$row" "The code works for $mins minutes - this page goes on by itself." muted
       tui_flush
       while kill -0 "$pid" 2>/dev/null; do
-        tui_wait_abort 1 && { kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; return 1; }
+        od_stopkey 1 && { od_kill "$pid"; return 1; }
       done
     fi
     wait "$pid"; rc=$?
@@ -422,6 +509,7 @@ od_signin() {
       return 0
     fi
     if [ "$rc" = 3 ]; then od_online && continue; return 1; fi
+    if [ "$rc" = 5 ]; then od_clock && continue; return 1; fi
     if [ "$rc" = 4 ]; then                    # Microsoft knows no such app or tenant
       if grep -qsE '^CLIENT_ID=.' /opt/diag/onedrive.conf; then
         say_wrapped "OneDrive sign-in failed" "$(tail -1 "$W/od.err")" "" \
@@ -438,6 +526,16 @@ od_signin() {
   done
 }
 
+# od_mount's work, in the background (od_bg): the clock (as in od_signin),
+# the folder, and the account as Microsoft names it now - not the label kept
+# with the sign-in: the confirm page says where the customer's image goes.
+od_open() {
+  /opt/diag/clock.sh sync >/dev/null 2>&1
+  $OD mount "$OD_MNT" || return
+  $OD whoami --live || od_who
+  return 0
+}
+
 # store_mount for OneDrive: STORAGE_MNT, signed in first when needed.
 od_mount() {
   local rc
@@ -446,16 +544,21 @@ od_mount() {
   od_who >/dev/null || od_signin || return 1
   od_routed || od_online || return 1
   while :; do
-    tui_frame "OneDrive" ""; tui_line 6 "Opening OneDrive..." muted; tui_flush
-    $OD mount "$OD_MNT" 2> "$W/od.err"; rc=$?
+    od_bg "OneDrive" "Opening OneDrive..." "$W/od.who" "$W/od.err" od_open; rc=$?
     if [ "$rc" = 0 ]; then
-      # the account as Microsoft names it now, not the label kept with the
-      # sign-in: the confirm page says where the customer's image goes
       STORAGE_MNT=$OD_MNT
-      STORE_DESC="OneDrive ($($OD whoami --live 2>>"$W/od.err" || od_who))"
+      STORE_DESC="OneDrive ($(tail -1 "$W/od.who"))"
       return 0
     fi
+    if [ "$rc" = 130 ]; then
+      # odfs.py runs in a session of its own: stopping the mount left it
+      # to open the folder after all, and the next try started a second
+      pkill -TERM -f "odfs.py $OD_MNT" 2>/dev/null
+      umount -l "$OD_MNT" 2>/dev/null
+      return 1
+    fi
     if [ "$rc" = 3 ]; then od_online && continue; return 1; fi
+    if [ "$rc" = 5 ]; then od_clock && continue; return 1; fi
     if ! od_who >/dev/null; then             # Microsoft ended the sign-in
       tui_confirm "Sign in again" yes "$(tail -1 "$W/od.err")" "" "Sign in to OneDrive again now?" \
         && od_signin && continue
@@ -474,8 +577,11 @@ od_sync() {
     OD_ERR="the OneDrive folder closed before the image's last files went up"
     return 1
   fi
-  tui_frame "OneDrive" ""; tui_line 6 "Sending the image's last files to OneDrive..." muted; tui_flush
-  $OD sync "$OD_MNT" 2> "$W/od.err" && return 0
+  od_bg "OneDrive" "Sending the image's last files to OneDrive..." /dev/null "$W/od.err" $OD sync "$OD_MNT"
+  case $? in
+    0) return 0 ;;
+    130) OD_ERR="stopped before the image's last files went up to OneDrive"; return 1 ;;
+  esac
   OD_ERR=$(tail -1 "$OD_STATE/last-error" 2>/dev/null)
   [ -n "$OD_ERR" ] || OD_ERR=$(tail -1 "$W/od.err")
   return 1
@@ -484,13 +590,27 @@ od_sync() {
 # Leaving Disk imaging: OneDrive closed, and the sign-in - renewed while it
 # was open - written back to the stick.
 od_close() {
-  mountpoint -q "$OD_MNT" && $OD umount "$OD_MNT" >> "$W/engine.out" 2>&1
+  if mountpoint -q "$OD_MNT"; then
+    tui_frame "OneDrive" ""; tui_line 6 "Closing OneDrive..." muted; tui_flush
+    od_umount
+  fi
   [ -s "$OD_STATE/token.json" ] && [ "$OD_STATE/token.json" -nt "$OD_STATE/kept" ] && od_keep
   return 0
 }
 
+# The folder closed - and within a time: Esc on Disk imaging must leave,
+# whatever odfs.py is still waiting on Microsoft for (1.26, Ash: "when i
+# want to quit by pressing esc button, it hangs").
+od_umount() {
+  timeout 30 $OD umount "$OD_MNT" >> "$W/engine.out" 2>&1 && return 0
+  echo "OneDrive folder did not close in 30 s - odfs.py stopped" >> "$W/engine.out"
+  pkill -TERM -f "odfs.py $OD_MNT" 2>/dev/null
+  umount -l "$OD_MNT" 2>/dev/null
+  return 0
+}
+
 od_signout() {   # od_stick's answer: 0 none left, 1 a copy may be left, 2 no stick
-  mountpoint -q "$OD_MNT" && $OD umount "$OD_MNT" >> "$W/engine.out" 2>&1
+  mountpoint -q "$OD_MNT" && od_umount
   $OD signout
   rm -f "$OD_STATE/token.json" "$OD_STATE/kept"
   od_stick "" "$OD_KEPT"

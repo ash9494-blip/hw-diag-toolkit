@@ -43,8 +43,12 @@ class State:
         self.dl_key = uuid.uuid4().hex
         self.faults = {"throttle_every": 0, "drop_fragment": 0, "page": 5, "search_path": False,
                        "decline": False, "pending_polls": 1, "expires_in": 3600, "ignore_range": False,
-                       "interval": 1, "full": False}
+                       "interval": 1, "full": False,
+                       # a far-away, slow network: seconds added to every
+                       # request, and download bytes per second (0 = no limit)
+                       "latency": 0.0, "rate": 0}
         self.fragments = 0
+        self.downloads = self.down_bytes = 0
 
     # ---------------------------------------------------------- the folder
     def resolve(self, rel):
@@ -167,6 +171,8 @@ class Handler(BaseHTTPRequestHandler):
         u = urllib.parse.urlsplit(self.path)
         path, query = u.path, urllib.parse.parse_qs(u.query)
         body = self._body() if method in ("POST", "PUT") else b""
+        if self.st.faults.get("latency") and not path.startswith("/_"):
+            time.sleep(self.st.faults["latency"])
         try:
             if path.startswith("/_"):
                 return self._admin(method, path, body)
@@ -328,7 +334,13 @@ class Handler(BaseHTTPRequestHandler):
                 a = int(rng.group(1))
                 b = min(int(rng.group(2) or size - 1), size - 1)
                 f.seek(a)
-                return self._send(206, f.read(b - a + 1), {"Content-Range": "bytes %d-%d/%d" % (a, b, size)})
+                data = f.read(b - a + 1)
+                with st.lock:
+                    st.downloads += 1
+                    st.down_bytes += len(data)
+                if st.faults.get("rate"):
+                    time.sleep(len(data) / st.faults["rate"])
+                return self._send(206, data, {"Content-Range": "bytes %d-%d/%d" % (a, b, size)})
             return self._send(200, f.read())
 
     def _fragment(self, method, sid, body):
@@ -384,9 +396,10 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/_rotate":                # every download link runs out
                 st.dl_key = uuid.uuid4().hex
             log = {"uploads": list(st.uploads), "requests": st.requests, "fragments": st.fragments,
-                   "faults": dict(st.faults)}
+                   "downloads": st.downloads, "down_bytes": st.down_bytes, "faults": dict(st.faults)}
             if path == "/_reset":                   # answers what came before it
                 st.uploads, st.fragments, st.requests = [], 0, 0
+                st.downloads = st.down_bytes = 0
         self._send(200, log)
 
 

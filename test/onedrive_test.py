@@ -17,9 +17,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 import urllib.request
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOLKIT = os.path.join(HERE, "..", "toolkit")
@@ -66,7 +69,8 @@ class Base(unittest.TestCase):
 
     def setUp(self):
         self.fault(throttle_every=0, drop_fragment=0, page=5, search_path=False, decline=False,
-                   pending_polls=1, expires_in=3600, ignore_range=False, full=False, interval=0)
+                   pending_polls=1, expires_in=3600, ignore_range=False, full=False, interval=0,
+                   latency=0.0, rate=0)
         self.admin("_reset")
 
     def admin(self, what, body=None):
@@ -240,6 +244,16 @@ class Graph(Base):
         self.fault(search_path=True)                           # personal OneDrive: paths given
         self.assertIn("/Deep/a/b/Win-00-00.mrimg", od.find_images(self.drive))
 
+    def test_find_images_says_when_the_sign_in_is_gone(self):
+        # 1.26 (VM): every look failed "not signed in", each was skipped as
+        # one unreadable folder, and the screen said "No images on OneDrive"
+        self.put("/Backups/X40.mrimg", b"x")
+        self.admin("_revoke")
+        with self.assertRaisesRegex(od.SignedOut, "run out or was withdrawn"):
+            od.find_images(self.drive)
+        with self.assertRaisesRegex(od.SignedOut, "run out or was withdrawn"):   # not "not signed in"
+            self.drive.me()
+
 
 @unittest.skipIf(odfs is None, "odfs needs fusepy + libfuse2: %s" % NO_FUSE)
 class Folder(Base):
@@ -318,6 +332,93 @@ class Folder(Base):
         self.assertEqual(self.fs.read("/read/big.zst", 10, len(data) + 5, fh), b"")
         self.fs.release("/read/big.zst", fh)
         self.assertLessEqual(self.fs.held, odfs.CACHE_BYTES + odfs.BLOCK)
+
+    def test_a_look_at_a_header_and_tail_fetches_little(self):
+        # the image list opens each image for its header and tail: 8 MB
+        # blocks and 3 more ahead were 32 MB an image (1.26: minutes on
+        # Ash's eight Macrium images)
+        data = blob(40 * 1024 * 1024, 13)
+        self.put("/look/img-00-00.mrimg", data)
+        self.admin("_reset")
+        fh = self.fs.open("/look/img-00-00.mrimg", os.O_RDONLY)
+        self.assertEqual(self.fs.read("/look/img-00-00.mrimg", 4096, 0, fh), data[:4096])
+        self.assertEqual(self.fs.read("/look/img-00-00.mrimg", 4096, len(data) - 4096, fh), data[-4096:])
+        self.fs.release("/look/img-00-00.mrimg", fh)
+        self.assertLessEqual(self.admin("_reset")["down_bytes"], 2 * odfs.SMALL)
+
+    def test_a_long_read_goes_to_big_blocks(self):
+        data = blob(3 * odfs.BLOCK, 14)
+        self.put("/long/p.aa", data)
+        fh = self.fs.open("/long/p.aa", os.O_RDONLY)
+        step = 128 * 1024
+        for off in range(0, odfs.LONG_RUN + 2 * step, step):
+            self.assertEqual(self.fs.read("/long/p.aa", step, off, fh), data[off:off + step])
+        self.assertTrue(any(k[2] == odfs.BLOCK for k in self.fs.blocks))
+        self.fs.release("/long/p.aa", fh)
+
+    def test_one_piece_asked_for_at_once_downloads_once(self):
+        # the kernel sends a file's read-ahead in several requests at once
+        data = blob(odfs.SMALL, 15)
+        self.put("/once/f", data)
+        fh = self.fs.open("/once/f", os.O_RDONLY)
+        self.fault(latency=0.3)
+        self.admin("_reset")
+        step = odfs.SMALL // 4
+        with ThreadPoolExecutor(4) as pool:
+            got = list(pool.map(lambda off: self.fs.read("/once/f", step, off, fh), range(0, odfs.SMALL, step)))
+        self.assertEqual(b"".join(got), data)
+        self.assertEqual(self.admin("_reset")["downloads"], 1)
+        self.fs.release("/once/f", fh)
+
+    def busy_pool(self):
+        """The read-ahead pool with one worker, held busy: what is sent to it
+        waits in its queue until the returned event is set."""
+        self.fs.pool = ThreadPoolExecutor(1)
+        hold = threading.Event()
+        self.fs.pool.submit(hold.wait, 30)
+        self.addCleanup(hold.set)
+        return hold
+
+    def test_a_reader_never_waits_behind_read_ahead(self):
+        data = blob(2 * odfs.SMALL, 16)
+        self.put("/q/f", data)
+        item = self.fs._item("/q/f")
+        self.busy_pool()
+        self.fs._prefetch(item, odfs.SMALL, 1)               # queued behind the busy worker
+        queued = self.fs.pending[self.fs._key(item, odfs.SMALL, 1)]
+        fh = self.fs.open("/q/f", os.O_RDONLY)
+        with ThreadPoolExecutor(1) as t:                     # would wait 30 s behind the queue
+            got = t.submit(self.fs.read, "/q/f", 4096, odfs.SMALL, fh).result(timeout=10)
+        self.assertEqual(got, data[odfs.SMALL:odfs.SMALL + 4096])
+        self.assertTrue(queued.cancelled())
+        self.fs.release("/q/f", fh)
+
+    def test_closing_a_file_drops_its_queued_read_ahead(self):
+        self.put("/q2/f", blob(4 * odfs.SMALL, 17))
+        item = self.fs._item("/q2/f")
+        self.busy_pool()
+        fh = self.fs.open("/q2/f", os.O_RDONLY)
+        for n in (1, 2, 3):
+            self.fs._prefetch(item, odfs.SMALL, n)
+        self.fs.release("/q2/f", fh)
+        self.assertEqual(self.fs.pending, {})
+
+    def test_a_failed_download_reaches_every_reader(self):
+        self.put("/fail/f", blob(odfs.SMALL, 18))
+        fh = self.fs.open("/fail/f", os.O_RDONLY)
+
+        def broken(item, off, n):
+            time.sleep(0.3)
+            raise od.GraphError("the link went down")
+        self.fs.drive.read = broken
+        step = odfs.SMALL // 4
+        with ThreadPoolExecutor(4) as pool:
+            tries = [pool.submit(self.fs.read, "/fail/f", step, off, fh) for off in range(0, odfs.SMALL, step)]
+            for t in tries:
+                with self.assertRaises(FuseOSError):
+                    t.result(timeout=10)                      # an error, never a reader left waiting
+        self.assertEqual(self.fs.pending, {})
+        self.fs.release("/fail/f", fh)
 
     def test_missing_names(self):
         with self.assertRaises(FuseOSError) as e:
