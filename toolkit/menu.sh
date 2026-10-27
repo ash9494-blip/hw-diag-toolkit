@@ -122,37 +122,53 @@ full_run() {
     "5.  Hardware error log - what the tests shook out" \
     "6.  Save the report" \
     "" \
-    "Nothing is written to the tested drive. Each stage stops with Q." \
-    "" "Start now?" || return
+    "Nothing is written to the tested drive." \
+    "Q stops a stage. In the pause between stages, Q stops the run." \
+    "Start now?" || return
 
   /opt/diag/sysinfo.sh --quiet
   /opt/diag/drivercheck.sh --quiet
   /opt/diag/gputest.sh --quiet
 
-  if [ -n "$disk" ]; then
-    /opt/diag/disktest.sh auto "$disk" 1G 1
-  else
-    # No drive is a finding, not a reason to abandon the whole run.
-    tui_frame "Full run - storage" "continuing automatically"
-    tui_badge 6 UNKNOWN "no drive detected"
-    tui_line 9  "No internal drive was found, so the disk benchmark is skipped."
-    tui_line 10 "Check that the drive is seated, or run the disk test manually." muted
-    local i
-    for i in 5 4 3 2 1; do
-      tui_line 12 "Moving on to the CPU test in ${i}s" muted
-      tui_flush; sleep 1
-    done
+  local note=""
+  if [ -z "$disk" ]; then
+    # No drive is a finding, not a reason to abandon the whole run: said on
+    # the pause before the CPU test.
+    note="No internal drive was found, so the disk benchmark is skipped."
     rsection "DISK BENCHMARK"
     rsilent "RESULT: SKIPPED -- no internal drive was detected"
     set_kv DISK_RESULT "SKIPPED (no drive detected)"
+  else
+    run_gap "Full run" "Disk benchmark" "$FULLRUN_GAP" || { full_run_stopped "Disk benchmark"; return 0; }
+    /opt/diag/disktest.sh auto "$disk" 1G 1
   fi
 
+  run_gap "Full run" "CPU stress test" "$FULLRUN_GAP" "" "$note" || { full_run_stopped "CPU stress test"; return 0; }
   AUTO=1 /opt/diag/cputest.sh auto 10
+  run_gap "Full run" "RAM test" "$FULLRUN_GAP" || { full_run_stopped "RAM test"; return 0; }
   AUTO=1 /opt/diag/ramtest.sh auto 5
   # Last: what the stress tests shook loose into the kernel log.
   /opt/diag/errlog.sh --quiet
 
-  tui_frame "Full run complete" "Enter to save the report"
+  show_results "Full run complete" "Enter to save the report"
+  tui_anykey
+  /opt/diag/savereport.sh
+}
+
+# Stopped between two stages: what ran is in the report, and can be saved.
+full_run_stopped() {   # the stage that did not start
+  rsection "FULL RUN"
+  rsilent "Stopped by the operator before: $1 - it and the stages after it did not run."
+  show_results "Full run stopped" "Enter to save the report      Q = back without saving"
+  tui_keys q
+  case "$TUI_KEY" in q|esc) return 0 ;; esac
+  /opt/diag/savereport.sh
+  return 0
+}
+
+# The RESULT lines collected so far, one per test, coloured by verdict.
+show_results() {   # title hint
+  tui_frame "$1" "$2"
   local row=6 l
   while IFS= read -r l; do
     [ $row -gt 20 ] && break
@@ -165,8 +181,33 @@ full_run() {
     row=$((row+1))
   done < <(grep -E '^RESULT:|^SMART health:' "$REPORT_TXT")
   tui_flush
-  tui_anykey
-  /opt/diag/savereport.sh
+}
+
+# Between two stages of Full run, or two tests of Peripherals -> Run them all:
+# the way out of the rest of the run (Ash, 1.27: "make a choice to exit when
+# i select full test"). Q inside a test stops only that test, and the run went
+# straight on to the next. It goes on by itself after a few seconds, so a Full
+# run left alone still finishes. 0 = go on, 1 = stop the run.
+FULLRUN_GAP=5   # s - nobody need be at the bench
+PERI_GAP=3      # s - the peripheral tests need the operator there anyway
+run_gap() {   # title next-test seconds [count "2 of 12"] [note, in amber]
+  local i
+  tui_anim_stop      # a stage run in AUTO mode can leave its animation playing
+  for ((i = $3; i > 0; i--)); do
+    tui_frame "$1" "Enter = start now      Q = stop here"
+    tui_kv 7 "Next" "$2" accent
+    [ -n "$4" ] && tui_kv 8 "Test" "$4"
+    [ -n "$5" ] && tui_para 10 "$5" warn >/dev/null
+    tui_line 12 "Starting in ${i}s" muted
+    tui_para 13 "Q stops the run here. The tests already done stay in the report." muted >/dev/null
+    tui_flush
+    tui_wait_key 1
+    case "$TUI_KEY" in
+      q|esc)       return 1 ;;
+      enter|space) return 0 ;;
+    esac
+  done
+  return 0
 }
 
 view_report() {
@@ -325,6 +366,17 @@ run_test() {   # one dispatcher, so both layouts stay in step
   return 0
 }
 
+# A peripheral test's name as its tile says it (Run them all's pause).
+peri_label() {
+  case "$1" in
+    screen) echo Screen ;;         touchpad) echo Touchpad ;;   touchscreen) echo Touchscreen ;;
+    sound) echo Sound ;;           usb) echo "USB ports" ;;     charging) echo Charging ;;
+    camera) echo Camera ;;         network) echo "Ethernet Network" ;;
+    wireless) echo "Wireless test" ;; sdcard) echo "SD card" ;; lid) echo "Lid sensor" ;;
+    fan) echo Fan ;;               *) echo "$1" ;;
+  esac
+}
+
 # New tiles go at the end: the numbers already in Ash's hands stay put.
 peripherals_menu() {
   local acts=(all screen touchpad touchscreen sound usb charging camera network wireless drivers sdcard lid fan)
@@ -345,8 +397,15 @@ peripherals_menu() {
       "Lid sensor|lid|$(test_result LID_RESULT)" \
       "Fan|fan|$(test_result FAN_RESULT)" || return
     if [ "${acts[$((TUI_CHOICE-1))]}" = all ]; then
-      local t
-      for t in screen touchpad touchscreen sound usb charging camera network wireless sdcard lid fan; do run_test "$t"; done
+      local t n=0 all=(screen touchpad touchscreen sound usb charging camera network wireless sdcard lid fan)
+      for t in "${all[@]}"; do
+        n=$((n + 1))
+        # a pause before each test after the first, to stop the rest (1.27)
+        if [ $n -gt 1 ]; then
+          run_gap "Run them all" "$(peri_label "$t")" "$PERI_GAP" "$n of ${#all[@]}" || break
+        fi
+        run_test "$t"
+      done
     else
       run_test "${acts[$((TUI_CHOICE-1))]}"
     fi

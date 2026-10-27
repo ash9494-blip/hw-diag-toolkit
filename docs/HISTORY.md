@@ -3,6 +3,40 @@
 Newest first. Each entry says what changed and why; the "why" is usually a
 real machine on Ash's bench.
 
+## 1.27.0 — 2026-10-21
+- **A way out of Full run and Run them all** (Ash: "make a choice to exit
+  when i select full test, whether on main full test or peripheral full
+  test"). Q inside a test stopped only that test, and the run went straight
+  on to the next. Now a pause before each long stage of Full run (disk
+  benchmark, CPU, RAM - 5 s) and before each peripheral test after the
+  first (Run them all - 3 s) says what comes next: Q there stops the run,
+  Enter starts the next at once, and left alone it goes on - an unattended
+  Full run still finishes. A stopped Full run shows what ran, offers to save
+  it, and says in the report where it was stopped. No internal drive is now
+  said on the pause before the CPU test (it had a 5 s screen of its own).
+  Full run's SMART page waited for Enter, so a Full run left alone never
+  got past it: it now holds 10 s and goes on (Enter sooner). Found when
+  this was taken over from the session that wrote it (VM).
+- **The screen shows the frames now** (Ash: "make the animation 60 frame per
+  second. also smoothen the display refresh rate as i see mouse move and
+  dont feel very smooth"). ui.py wrote the framebuffer through mmap. On
+  simpledrm - and every DRM driver's fbdev - a store through the mapping
+  reaches the screen only when the kernel's deferred I/O comes round,
+  HZ/20 = 50 ms after the first one (drm_fbdev_shmem.c, fb_defio.c): the
+  pointer and every animation were held to 20 updates a second, whatever
+  they were drawn at. Writes go through write() now, which the kernel sends
+  to the screen at once; the mapping stays as the fallback if write() is
+  refused.
+  - Animations at 60 a second (were 45); a scene playing while its test
+    measures stays at 15. Two timing slips fixed: the live animation waited
+    a whole period after a frame had finished (a 15 ms frame at 45 a second
+    came out at 27), and the "How it works" player at least 10 ms.
+  - The arrow is drawn at most 120 times a second, where the pointer is by
+    then - not once for every report (a 1000 Hz mouse asked for a thousand
+    small writes a second).
+  - Tried and dropped: writing only the rows of a frame that changed.
+    Finding them cost as much as converting the whole frame.
+
 ## 1.26.1 — 2026-10-21
 Ash's first day with 1.26.0 on the bench.
 - **Date and time** (Ash: the OneDrive sign-in failed on a laptop whose

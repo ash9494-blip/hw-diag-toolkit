@@ -242,15 +242,39 @@ class Framebuffer:
     last = None                    # the frame on screen, without the pointer
     cursor = None                  # Cursor, once main() has made one
 
+    _mapped = False                # write() refused: through the mapping after all
+
+    def _write(self, off, data):
+        """Bytes into the framebuffer at `off`. With write(), not through the
+        mapping: on simpledrm - and every DRM driver's fbdev - a store through
+        mmap reaches the screen only when the kernel's deferred I/O comes
+        round, HZ/20 = 50 ms after the first one, so the pointer and every
+        animation were held to 20 updates a second however fast they were
+        drawn (Ash, 1.27: the mouse still did not feel smooth). write() sends
+        the change to the screen at once."""
+        if not self._mapped:
+            mv, at = memoryview(data), off
+            try:
+                while mv:
+                    n = os.pwrite(self.fd, mv, at)
+                    if n <= 0:
+                        raise OSError("framebuffer write returned %d" % n)
+                    mv, at = mv[n:], at + n
+                return
+            except OSError as exc:
+                sys.stderr.write("ui: framebuffer write() failed (%s) - using the mapping\n" % exc)
+                self._mapped = True
+        self.map.seek(off)
+        self.map.write(data)
+
     def blit(self, img):
+        # The whole frame: writing only the rows that changed was tried
+        # (1.27) - finding them cost as much as converting the frame.
         data = img.tobytes("raw", self.rawmode)
-        if self.stride == self.rowbytes:
-            self.map.seek(0)
-            self.map.write(data)
-        else:                      # padded scanlines
-            for y in range(self.h):
-                self.map.seek(y * self.stride)
-                self.map.write(data[y * self.rowbytes:(y + 1) * self.rowbytes])
+        if self.stride != self.rowbytes:                 # padded scanlines
+            pad, rb = b"\0" * (self.stride - self.rowbytes), self.rowbytes
+            data = b"".join(data[r * rb:(r + 1) * rb] + pad for r in range(self.h))
+        self._write(0, data)
         self.last = img
         if self.cursor is not None:
             self.cursor.drawn = None
@@ -264,8 +288,7 @@ class Framebuffer:
         data = patch.tobytes("raw", self.rawmode)
         rb = w * bpp
         for r in range(h):
-            self.map.seek((y + r) * self.stride + x * bpp)
-            self.map.write(data[r * rb:(r + 1) * rb])
+            self._write((y + r) * self.stride + x * bpp, data[r * rb:(r + 1) * rb])
 
     def update_region(self, patch, x, y):
         """A small part of the frame changes (the imaging bar's motion): kept
@@ -309,6 +332,11 @@ class Cursor:
     Hidden until a pointing device first moves, and switched off entirely
     during the full-screen tests: on the black page of the screen test a white
     arrow is indistinguishable from a stuck pixel."""
+    # A mouse reports up to 1000 times a second and the panel shows 60: the
+    # arrow is drawn at most PERIOD apart, always where the pointer is by
+    # then, instead of once for every report (Keyboard.show_pointer).
+    PERIOD = 1.0 / 120
+
     def __init__(self, fb, s):
         self.fb = fb
         self.sprite = _cursor_sprite(max(16, int(26 * s)))
@@ -316,12 +344,15 @@ class Cursor:
         self.visible = False
         self.enabled = True
         self.drawn = None
+        self.pending = False       # moved since it was last drawn
+        self.t_paint = 0.0
 
     def _box(self):
         w, h = self.sprite.size
         return (self.x, self.y, min(self.fb.w, self.x + w), min(self.fb.h, self.y + h))
 
     def paint(self):
+        self.pending = False
         if not (self.visible and self.enabled) or self.fb.last is None:
             return
         box = self._box()
@@ -339,13 +370,32 @@ class Cursor:
         self.drawn = None
 
     def move_to(self, x, y):
+        """Where the pointer is now; drawn there by the next draw()."""
         x = max(0, min(self.fb.w - 1, int(x)))
         y = max(0, min(self.fb.h - 1, int(y)))
         if self.visible and (x, y) == (self.x, self.y):
             return
-        old = self.drawn
         self.x, self.y = x, y
         self.visible = True
+        self.pending = True
+
+    def due(self, now):
+        """Seconds until the moved arrow may be drawn (0: now); None if it
+        has not moved."""
+        if not self.pending:
+            return None
+        return max(0.0, self.t_paint + self.PERIOD - now)
+
+    def draw(self, now=None):
+        """The arrow at where the pointer is, if it moved and PERIOD has
+        passed since it was last drawn - else nothing, and due() says when."""
+        now = time.time() if now is None else now
+        wait = self.due(now)
+        if wait is None or wait > 0:
+            return
+        self.pending = False
+        self.t_paint = now
+        old = self.drawn
         if old and self.enabled and self.fb.last is not None:
             # One write covering where it was and where it is: erasing first
             # and painting after showed the background in between - the
@@ -1123,6 +1173,7 @@ class Keyboard:
         end = time.time() + timeout
         while True:
             now = time.time()
+            self.show_pointer(now)
             if self._hover_due and now >= self._hover_due:
                 self._hover_due = 0.0             # the pointer has come to rest
                 return "hover", 0
@@ -1140,7 +1191,7 @@ class Keyboard:
                 continue
             # Wake at least once a second so the clock and Wi-Fi icon in the
             # header keep up while a menu sits waiting.
-            wait = min(left, 1.0)
+            wait = self.pointer_wait(min(left, 1.0), now)
             if self._hover_due:
                 wait = max(0.0, min(wait, self._hover_due - now))
             r, _, _ = select.select(fds, [], [], wait)
@@ -1158,6 +1209,7 @@ class Keyboard:
                         self._last_hover = time.time()
                     if ev:
                         self._hover_due = 0.0
+                        self.show_pointer()
                         return ev, 0
                     continue
                 try: data = os.read(fd, EVENT_SIZE * 64)
@@ -1192,7 +1244,24 @@ class Keyboard:
                     pev = None
                 if pev:
                     self._hover_due = 0.0
+                    self.show_pointer()
                     return pev, 0
+
+    def show_pointer(self, now=None):
+        """The arrow drawn where the pointer has moved to, when its time has
+        come (Cursor.PERIOD) - after reading the pointing devices, and on the
+        wake-up pointer_wait() asked for."""
+        if self.cursor is not None:
+            self.cursor.draw(now)
+
+    def pointer_wait(self, wait, now=None):
+        """`wait`, cut short to when a moved arrow is next due to be drawn:
+        the last report of a movement must not wait for the next event or a
+        timeout to show."""
+        if self.cursor is None:
+            return wait
+        due = self.cursor.due(time.time() if now is None else now)
+        return wait if due is None else min(wait, due)
 
     def drain(self):
         if self.script:
@@ -1216,6 +1285,7 @@ class Keyboard:
             if fd in self.ptr:
                 self._read_pointer(fd)
         self._hover_due = 0.0
+        self.show_pointer()
 
     # ---- pointing devices ------------------------------------------
     # Read alongside the keyboards but never grabbed: the touchpad and mouse
@@ -4327,10 +4397,12 @@ def main():
 
     def live_paint():
         """One frame; False (and live mode ended) if the animation failed -
-        the test then shows its usual screen instead of a frozen one."""
+        the test then shows its usual screen instead of a frozen one. The
+        next is due a period after this one STARTED: counted from its end,
+        a 15 ms frame at 45 a second came out at 27 (1.27)."""
         try:
-            fb.blit(live["anim"].frame(scr.title, scr.hint, scr.items))
             live["t"] = time.time()
+            fb.blit(live["anim"].frame(scr.title, scr.hint, scr.items))
             return True
         except Exception as exc:
             import traceback
@@ -4367,10 +4439,15 @@ def main():
             # the pointing devices too: between screens nothing else reads
             # them, and the arrow stood still, then jumped (1.22)
             pfds = list(kb.ptr) if fb.cursor is not None else []
-            r, _, _ = select.select([cmd_fd] + pfds, [], [],
-                                    min(0.12, live_period()) if live["anim"] is not None else 0.12)
+            # until the animation's next frame is due, not a whole period on
+            # from the end of the last one
+            r, _, _ = select.select([cmd_fd] + pfds, [], [], kb.pointer_wait(
+                min(0.12, max(0.0, live["t"] + live_period() - time.time()))
+                if live["anim"] is not None else 0.12))
             if pfds and any(fd != cmd_fd for fd in r):
                 kb.pump_pointer([fd for fd in r if fd != cmd_fd])
+            else:
+                kb.show_pointer()
             if cmd_fd in r:
                 chunk = os.read(cmd_fd, 65536)
                 if not chunk:                     # writer closed; reopen
@@ -4558,17 +4635,20 @@ def main():
                         end = time.time() + float(parts[1])
                         name = None
                         while True:
-                            if live["anim"] is not None and not live_paint():
+                            # a frame when one is due, not on every pass: a
+                            # key or the pointer ends the poll early
+                            if live["anim"] is not None and time.time() - live["t"] >= live_period() \
+                                    and not live_paint():
                                 dirty = True; scr.render(); dirty = False
                             left = end - time.time()
                             if live["anim"] is not None:
-                                step = min(left, live_period())
+                                step = min(left, live["t"] + live_period() - time.time())
                             elif scr.live_bar() is not None:
                                 bar_frame()
                                 step = min(left, 1.0 / BarLive.FPS)
                             else:
                                 step = left
-                            name, _ = kb.poll(max(0.01, step))
+                            name, _ = kb.poll(max(0.002, step))
                             if name is not None and name not in Keyboard.POINTER_EVENTS:
                                 break
                             name = None

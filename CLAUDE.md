@@ -5,7 +5,7 @@ Bootable USB/ISO for bench-testing laptops at Data Dynamics (Johor). Owner: Ash
 minimal Ubuntu live system straight into a full-screen tile menu of hardware
 tests, and writes a per-machine report to the USB stick.
 
-**Current version: 1.26.1** (`toolkit/lib.sh` → `DIAG_VERSION`).
+**Current version: 1.27.0** (`toolkit/lib.sh` → `DIAG_VERSION`).
 Last delivered ISO: 1.26.1, SHA256 `870f0035f03fe5f891de6f5b718ad88ff3ba261f50de4766b4962ea65e141bab`
 (asks "USB or OneDrive" first; with no app IDs built in, choosing OneDrive
 asks for them on screen and keeps them in the stick's onedrive.config).
@@ -241,7 +241,7 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   (each call restarts the loop), never inside the redraw loop. A phase that
   ends without a question or result screen (Full run's AUTO mode) must call
   `tui_anim_stop`. Keep the frame rate low where drawing would skew the
-  reading (battery drain fps=1, CPU idle baseline fps=2). Scenes play at 45
+  reading (battery drain fps=1, CPU idle baseline fps=2). Scenes play at 60
   fps (`ssdanim.FPS`), except while a test measures: scenes in `MEASURING`
   stay at 15 - add a new measuring scene there.
 - Network checks go out of the adapter under test (`ping -I`, `curl
@@ -284,6 +284,11 @@ radio, touchpad or battery. Say so when something is only VM-verified.
 - PIL `load_default()` is a fixed 11 px bitmap: a missing font = tiny text, no
   error. The build asserts the fonts exist.
 - Framebuffer is BGRX, not RGBX.
+- Write the framebuffer with write()/pwrite (`Framebuffer._write`), never
+  through the mmap: simpledrm's fbdev (any DRM fbdev) puts mmap stores on
+  screen only every 50 ms (deferred I/O, HZ/20) - the pointer and the
+  animations were stuck at 20 updates a second until 1.27, invisible in a
+  screenshot. A frame's period counts from its start, not its end.
 - ui.py: `_draw_grid` gets `d` not the canvas; `KDSETMODE/KD_TEXT/KD_GRAPHICS`
   constants must stay (deleting them silently drops to the text UI).
 - Daemons started by tests inherit fds: lib.sh closes fd 8 (menu's lock) so
@@ -433,6 +438,13 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   calls against the tui.sh that ships (`git show HEAD:toolkit/tui.sh`).
 
 ## Open items
+
+- **1.27.0 on the bench** (offscreen + VM only): does the pointer feel smooth
+  on a real touchpad and mouse now that the framebuffer is written with
+  write() (QEMU's display cannot show the 50 ms it used to wait); the CPU a
+  60 fps animation costs on the slowest bench machine at 1080p (WSL: 13-32 ms
+  to draw a frame + 11-27 ms to convert it - frames are dropped, not
+  slowed); the Full run / Run them all pause on a real keyboard.
 
 - **1.26.1 on the bench** (VM against a slow fake Microsoft only): how long
   Restore's OneDrive list takes on Ash's real tenant and office link (fake:
