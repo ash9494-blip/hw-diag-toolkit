@@ -24,7 +24,9 @@ may be offered:
   and so is a laptop whose version cannot be read (Ash: newer only).
 
     biospkg.py list BIOSDIR [--dmi DIR]   one line per folder:
-        folder|state|model|version|current|reason|flasher|image
+        folder|state|model|version|current|reason|flasher|image|dir
+        dir: where flasher and image are, under BIOSDIR ("folder" or
+             "folder/inner")
         state: ok, same, older, unknown, other-model, no-version, not-package,
                bad-name
     biospkg.py current [--dmi DIR]        this laptop's BIOS version (2.00)
@@ -35,10 +37,13 @@ import re
 import sys
 
 DMI = "/sys/class/dmi/id"
-FLASHER = "shellflash64.efi"            # the name compared without case (FAT)
+FLASHERS = ("shellflash64.efi", "chgfirma.efi")   # names compared without case (FAT)
 NAME = re.compile(r"^(?P<model>[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)_[Bb](?P<ver>\d{3})(?:_|$)")
 VERSION = re.compile(r"(\d+)\.(\d+)")
 NOT_PACKAGE = "not a USB BIOS package the toolkit can run"
+NO_FLASHER = "not a USB BIOS package: no ShellFlash64.efi or ChgFirmA.efi in it (a Windows .exe cannot run here)"
+NO_IMAGE = "not a USB BIOS package: no .bin image in it"
+MANY = "more than one flasher or .bin in it - keep only the files Dynabook ships"
 SHELL_SAFE = re.compile(r"^[A-Za-z0-9._-]+$")
 BAD_NAME = "a name with spaces or signs the UEFI Shell cannot run - rename it as Dynabook ships it"
 
@@ -87,41 +92,62 @@ def laptop(root=DMI):
 
 
 def package_files(path):
-    """(flasher, image) file names in the folder, or None: the flasher and
-    exactly one .bin, nothing to guess between."""
+    """(flasher, image) file names in the folder, or the reason it is not a
+    package: one flasher and exactly one .bin, nothing to guess between."""
     try:
         names = [n for n in os.listdir(path) if os.path.isfile(os.path.join(path, n))]
     except OSError:
-        return None
-    flasher = [n for n in names if n.lower() == FLASHER]
+        return NOT_PACKAGE
+    flasher = [n for n in names if n.lower() in FLASHERS]
     images = [n for n in names if n.lower().endswith(".bin")]
-    if len(flasher) != 1 or len(images) != 1:
-        return None
+    if len(flasher) > 1 or len(images) > 1:
+        return MANY
+    if not flasher:
+        return NO_FLASHER
+    if not images:
+        return NO_IMAGE
     return flasher[0], images[0]
 
 
-def judge(folder, path, names, current):
-    """One folder: (state, model, version, reason, flasher, image)."""
+def locate(path):
+    """("", flasher, image), or (inner, flasher, image) when the folder holds
+    nothing but one folder (Windows' Extract All), or the reason it is not a
+    package."""
+    try:
+        entries = [n for n in os.listdir(path) if not n.startswith(".")]
+    except OSError:
+        return NOT_PACKAGE
+    if len(entries) == 1 and os.path.isdir(os.path.join(path, entries[0])):
+        files = package_files(os.path.join(path, entries[0]))
+        return files if isinstance(files, str) else (entries[0], *files)
     files = package_files(path)
-    if files is None:
-        return "not-package", "", None, NOT_PACKAGE, "", ""
-    if not all(SHELL_SAFE.match(n) for n in (folder, *files)):
-        return "bad-name", "", None, BAD_NAME, *files
+    return files if isinstance(files, str) else ("", *files)
+
+
+def judge(folder, path, names, current):
+    """One folder: (state, model, version, reason, flasher, image, inner)."""
+    found = locate(path)
+    if isinstance(found, str):
+        return "not-package", "", None, found, "", "", ""
+    inner, flasher, image = found
+    files = (flasher, image, inner)
+    if not all(SHELL_SAFE.match(n) for n in (folder, inner or folder, flasher, image)):
+        return ("bad-name", "", None, BAD_NAME) + files
     parsed = parse_name(folder)
     if parsed is None:
-        return "no-version", "", None, "the folder name does not say the model and version " \
-                                       "(like X30L-M_B210_USB)", *files
+        return ("no-version", "", None, "the folder name does not say the model and version "
+                                        "(like X30L-M_B210_USB)") + files
     model, version = parsed
     if not model_matches(model, names):
         this = next((n for n in names if n), "") or "unknown"
-        return "other-model", model, version, "for the %s - this laptop is a %s" % (model, this), *files
+        return ("other-model", model, version, "for the %s - this laptop is a %s" % (model, this)) + files
     if current is None:
-        return "unknown", model, version, "this laptop's BIOS version cannot be read", *files
+        return ("unknown", model, version, "this laptop's BIOS version cannot be read") + files
     if version == current:
-        return "same", model, version, "the same version as this laptop's BIOS", *files
+        return ("same", model, version, "the same version as this laptop's BIOS") + files
     if version < current:
-        return "older", model, version, "older than this laptop's BIOS (%s)" % vstr(current), *files
-    return "ok", model, version, "%s -> %s" % (vstr(current), vstr(version)), *files
+        return ("older", model, version, "older than this laptop's BIOS (%s)" % vstr(current)) + files
+    return ("ok", model, version, "%s -> %s" % (vstr(current), vstr(version))) + files
 
 
 def scan(bios_dir, root=DMI):
@@ -134,10 +160,11 @@ def scan(bios_dir, root=DMI):
     except OSError:
         folders = []
     for folder in folders:
-        state, model, version, reason, flasher, image = judge(folder, os.path.join(bios_dir, folder),
-                                                              names, current)
+        state, model, version, reason, flasher, image, inner = judge(
+            folder, os.path.join(bios_dir, folder), names, current)
         out.append(dict(folder=folder, state=state, model=model, version=vstr(version),
-                        current=vstr(current), reason=reason, flasher=flasher, image=image))
+                        current=vstr(current), reason=reason, flasher=flasher, image=image,
+                        dir=folder + "/" + inner if inner else folder))
     out.sort(key=lambda p: (p["state"] != "ok", p["folder"].lower()))
     return out
 
@@ -154,7 +181,7 @@ def main(argv):
     if cmd == "list" and len(argv) > 2:
         for p in scan(argv[2], root):
             print(_line(p["folder"], p["state"], p["model"], p["version"], p["current"], p["reason"],
-                        p["flasher"], p["image"]))
+                        p["flasher"], p["image"], p["dir"]))
     elif cmd == "current":
         print(vstr(laptop(root)[1]))
     elif cmd == "model":

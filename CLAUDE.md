@@ -5,10 +5,11 @@ Bootable USB/ISO for bench-testing laptops at Data Dynamics (Johor). Owner: Ash
 minimal Ubuntu live system straight into a full-screen tile menu of hardware
 tests, and writes a per-machine report to the USB stick.
 
-**Current version: 1.28.0** (`toolkit/lib.sh` → `DIAG_VERSION`).
-Last delivered ISO: 1.28.0, SHA256 `639a00bafacd8204c535cfd1727cbeb5dd88959c05006479a4aaa65b192cd961`
-(OneDrive taken out again - Ash: "remove one drive function entirely" -
-and tile 20, BIOS update, added; OneDrive's code is in git, d615508).
+**Current version: 1.28.1** (`toolkit/lib.sh` → `DIAG_VERSION`).
+Last delivered ISO: 1.28.1, SHA256 `82218796a8681687a66938769ba8fec87d3fe200389e451dac12a1bb62c9bdb2`
+(BIOS update takes the X30L-K's ChgFirmA.efi packages and the folder
+Windows' Extract All makes; 1.28.0 took OneDrive out - its code is in git,
+d615508 - and added tile 20).
 Version history and the reasoning behind past changes: `docs/HISTORY.md`.
 
 ## Layout
@@ -159,7 +160,8 @@ radio, touchpad or battery. Say so when something is only VM-verified.
    squashfs, not the source (build-all.sh does this).
 4. **The toolkit never writes firmware/DMI/EEPROM itself.** Since 1.28 (Ash,
    agreed): a BIOS update may *start the maker's own flasher with the
-   maker's own image* (Dynabook's ShellFlash64.efi + .bin), only for the
+   maker's own image* (Dynabook's ShellFlash64.efi or ChgFirmA.efi + .bin;
+   ChgFirmA's /f is a force), only for the
    matching model, only newer, after UPDATE is typed - never in Full run.
    Never a force option, never a vendor binary in the ISO (they come from
    Ash's stick). DMI writing stays banned: machine details edits override
@@ -212,7 +214,9 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   page that reads none looks hung, and the keys pressed meanwhile answer the
   pages after it (1.26's OneDrive search).
 - BIOS update (biosupdate.sh, 1.28): packages live in `DIAGDATA\BIOS\<folder
-  as Dynabook names it>` (X30L-M_B210_USB: ShellFlash64.efi + one .bin),
+  as Dynabook names it>` (X30L-M_B210_USB: ShellFlash64.efi + one .bin;
+  X30L-K_B860_..._USB: ChgFirmA.efi + one .BIN - also one folder down, as
+  Windows' Extract All leaves it),
   DIAGDATA FAT32 - the firmware reads nothing else. Checks: model (biospkg,
   DMI from /sys, never the report overrides), newer only, AC, battery >= 30
   %, BitLocker warning, unsaved results, UPDATE typed. Then on DIAGDATA
@@ -457,7 +461,10 @@ radio, touchpad or battery. Say so when something is only VM-verified.
 - **1.28.0 BIOS update on the bench** (UEFI VM only: OVMF dressed as an
   X30L-M on 2.00 via -smbios; Dynabook's flasher started there and refused
   - "Unable to detect BIOS communication service channel"). First real
-  flash: Ash, on a bench X30L-M that is not a customer's. To see: Ash's
+  flash: Ash, on a bench X30L-M that is not a customer's. 1.28.1: the
+  X30L-K's ChgFirmA.efi (Ash's B860 package, VM only - OVMF answered its
+  UpdateCapsule "Unsupported"); a real X30L-K is the first chance to see
+  ChgFirmA's own capsule restart. To see: Ash's
   DIAGDATA - Ventoy holds it, so it is probably his Ventoy partition,
   exFAT, which the firmware cannot read (the toolkit then says so); a FAT32
   DIAGDATA in Ventoy's reserved space, or a second stick labelled DIAGDATA,

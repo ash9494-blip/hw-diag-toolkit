@@ -16,7 +16,7 @@
 # needs silencing here.
 exec 8>&-
 
-DIAG_VERSION="1.28.0"
+DIAG_VERSION="1.28.1"
 RUN_DIR=/run/diag
 REPORT_TXT="$RUN_DIR/report.txt"
 SUMMARY_KV="$RUN_DIR/summary.kv"

@@ -53,15 +53,29 @@ class Parts(unittest.TestCase):
     def test_package_files(self):
         d = tempfile.mkdtemp()
         try:
+            self.assertEqual(biospkg.package_files(d), biospkg.NO_FLASHER)
             write(os.path.join(d, "ShellFlash64.efi"))
-            self.assertIsNone(biospkg.package_files(d))                 # no image yet
+            self.assertEqual(biospkg.package_files(d), biospkg.NO_IMAGE)
             write(os.path.join(d, "BIOS0126.bin"))
             self.assertEqual(biospkg.package_files(d), ("ShellFlash64.efi", "BIOS0126.bin"))
             write(os.path.join(d, "BIOS0125.bin"))
-            self.assertIsNone(biospkg.package_files(d))                 # two images: never guess
+            self.assertEqual(biospkg.package_files(d), biospkg.MANY)    # two images: never guess
         finally:
             shutil.rmtree(d)
-        self.assertIsNone(biospkg.package_files("/no/such/folder"))
+        self.assertEqual(biospkg.package_files("/no/such/folder"), biospkg.NOT_PACKAGE)
+
+    def test_both_dynabook_flashers(self):
+        # the X30L-K's packages (B810..B860) carry ChgFirmA.efi, not
+        # ShellFlash64.efi (1.28.1: "not a USB BIOS package" on the bench)
+        d = tempfile.mkdtemp()
+        try:
+            write(os.path.join(d, "ChgFirmA.efi"))
+            write(os.path.join(d, "BIOS0119.BIN"))
+            self.assertEqual(biospkg.package_files(d), ("ChgFirmA.efi", "BIOS0119.BIN"))
+            write(os.path.join(d, "ShellFlash64.efi"))
+            self.assertEqual(biospkg.package_files(d), biospkg.MANY)    # two flashers: never guess
+        finally:
+            shutil.rmtree(d)
 
 
 class Scan(unittest.TestCase):
@@ -101,7 +115,7 @@ class Scan(unittest.TestCase):
         self.assertEqual(s["A40-J_B180_USB"],
                          ("other-model", "for the A40-J - this laptop is a dynabook PORTEGE X30L-M"))
         self.assertEqual(s["X30L-M_USB"][0], "no-version")
-        self.assertEqual(s["Old Toshiba"], ("not-package", biospkg.NOT_PACKAGE))
+        self.assertEqual(s["Old Toshiba"], ("not-package", biospkg.NO_FLASHER))
         self.assertNotIn(".diag", s)
         self.assertEqual(biospkg.scan(self.bios, self.dmi)[0]["folder"], "X30L-M_B210_USB")   # offered first
 
@@ -114,6 +128,32 @@ class Scan(unittest.TestCase):
         s = self.states()
         for folder in ("X30L-M_B210_USB", "X30L-M_B220_USB copy", "X30L-M_B230_%USB%"):
             self.assertEqual(s[folder], ("bad-name", biospkg.BAD_NAME), folder)
+
+    def test_the_x30l_k_package_as_windows_extracts_it(self):
+        # Extract All of X30L-K_B860_12Gen_13Gen_USB.zip: the files one folder
+        # down, in a folder of the same name (Ash's copy, 1.28.1)
+        self.laptop("PORTEGE X30L-K", "Version 8.40")
+        name = "X30L-K_B860_12Gen_13Gen_USB"
+        self.package(name + "/" + name, ("ChgFirmA.efi", "BIOS0119.BIN"))
+        p = biospkg.scan(self.bios, self.dmi)[0]
+        self.assertEqual((p["state"], p["reason"]), ("ok", "8.40 -> 8.60"))
+        self.assertEqual((p["flasher"], p["image"], p["dir"]),
+                         ("ChgFirmA.efi", "BIOS0119.BIN", name + "/" + name))
+        # copied straight: no inner folder
+        shutil.rmtree(os.path.join(self.bios, name))
+        self.package(name, ("ChgFirmA.efi", "BIOS0119.BIN"))
+        self.assertEqual(biospkg.scan(self.bios, self.dmi)[0]["dir"], name)
+
+    def test_only_one_folder_down_and_only_alone(self):
+        # a folder beside other files is not looked into, nor a second level
+        self.package("X30L-M_B210_USB/inner", ("ShellFlash64.efi", "BIOS0126.bin"))
+        write(os.path.join(self.bios, "X30L-M_B210_USB", "readme.txt"))
+        self.package("X30L-M_B220_USB/a/b", ("ShellFlash64.efi", "BIOS0126.bin"))
+        self.package("X30L-M_B230_USB/inner copy", ("ShellFlash64.efi", "BIOS0126.bin"))
+        s = self.states()
+        self.assertEqual(s["X30L-M_B210_USB"], ("not-package", biospkg.NO_FLASHER))
+        self.assertEqual(s["X30L-M_B220_USB"], ("not-package", biospkg.NO_FLASHER))
+        self.assertEqual(s["X30L-M_B230_USB"], ("bad-name", biospkg.BAD_NAME))   # the inner name too
 
     def test_the_series_name_does_not_make_a_match(self):
         # product_family is the series ("dynabook PORTEGE X30L"): a package
@@ -137,8 +177,9 @@ class Scan(unittest.TestCase):
         out = subprocess.run([sys.executable, os.path.join(TOOLKIT, "biospkg.py"), "list", self.bios,
                               "--dmi", self.dmi], capture_output=True, text=True, check=True).stdout
         lines = out.splitlines()
-        self.assertEqual(lines[0], "X30L-M_B210_USB|ok|X30L-M|2.10|2.00|2.00 -> 2.10|ShellFlash64.efi|BIOS0126.bin")
-        self.assertTrue(all(len(l.split("|")) == 8 for l in lines), lines)
+        self.assertEqual(lines[0], "X30L-M_B210_USB|ok|X30L-M|2.10|2.00|2.00 -> 2.10|ShellFlash64.efi|BIOS0126.bin"
+                                   "|X30L-M_B210_USB")
+        self.assertTrue(all(len(l.split("|")) == 9 for l in lines), lines)
         cur = subprocess.run([sys.executable, os.path.join(TOOLKIT, "biospkg.py"), "current", "--dmi", self.dmi],
                              capture_output=True, text=True, check=True).stdout
         self.assertEqual(cur.strip(), "2.00")

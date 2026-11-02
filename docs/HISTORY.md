@@ -3,6 +3,30 @@
 Newest first. Each entry says what changed and why; the "why" is usually a
 real machine on Ash's bench.
 
+## 1.28.1 — 2026-11-02
+- **BIOS update: the X30L-K's packages** (Ash's photo: a PORTEGE X30L-K,
+  X30L-K_B860_12Gen_13Gen_USB "NOT OFFERED - not a USB BIOS package the
+  toolkit can run"). Dynabook ships two USB flashers: ShellFlash64.efi
+  (Phoenix, the X30L-M) and ChgFirmA.efi (its own capsule tool, every
+  X30L-K package B810..B860: `ChgFirmA [/f /d /h] [BIOS]`, checks the
+  board's "2nd ID" and the version itself, resets by itself after
+  UpdateCapsule). biospkg.py takes either, with the image as the one
+  argument; /f (force) is never given. Ash's copy also had the files one
+  folder down (Windows' Extract All: X30L-K_B860_..._USB inside a folder of
+  the same name) - a package folder holding nothing but one folder is
+  looked into, and startup.nsh changes into that inner folder (`list`
+  gains a 9th field, dir). A folder that is still no package now says
+  what is missing: no flasher (a Windows .exe cannot run here), no .bin,
+  or more than one of either.
+- VM (OVMF dressed as a PORTEGE X30L-K on 8.40, Ash's real B860 folder
+  one level down on a Ventoy-like stick): offered as 8.40 -> 8.60, UPDATE,
+  the Shell ran ChgFirmA V0.33 in the inner folder ("UpdateCapsule Done!
+  Status = Unsupported" - OVMF is no Dynabook, nothing written), back to
+  the stick by itself, "FAIL still 8.40", no Diag boot entries, no
+  BootNext, BIOS\.diag gone. Not seen yet: ChgFirmA on a real X30L-K
+  (its own capsule restart, whether it asks anything).
+- Delivered: SHA256 82218796a8681687a66938769ba8fec87d3fe200389e451dac12a1bb62c9bdb2
+
 ## 1.28.0 — 2026-10-29
 - **OneDrive taken out** (Ash: "remove one drive function entirely"). Back
   up, Restore, Check and Browse go straight to the USB drive list again, as

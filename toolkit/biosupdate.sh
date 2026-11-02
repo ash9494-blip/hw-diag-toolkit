@@ -4,8 +4,10 @@
 # invariant 4): it starts the maker's own flasher with the maker's own image,
 # for this laptop's model, newer only, after the technician types UPDATE.
 #
-# Dynabook ships a USB update as two files - ShellFlash64.efi (Phoenix SCT
-# Flash, a UEFI Shell program) and the image (BIOS0126.bin, a UEFI capsule) -
+# Dynabook ships a USB update as two files - the flasher, a UEFI Shell
+# program (ShellFlash64.efi, Phoenix SCT Flash, on the X30L-M; ChgFirmA.efi,
+# Dynabook's capsule tool, on the X30L-K - 1.28.1), and the image
+# (BIOS0126.bin, a UEFI capsule); both flashers take the image as argument -
 # which Ash runs today from the root of a FAT32 stick with the "`" key at
 # power-on. Here they live on the stick's DIAGDATA, a folder per package as
 # Dynabook names it (BIOS\X30L-M_B210_USB), and the laptop restarts by itself
@@ -169,20 +171,20 @@ bitlocker_drives() {   # BitLocker partitions on the laptop's own drives
 
 # ---------------------------------------------------------------- the screen
 pick_package() {   # -> PK_* of the chosen folder; 1 = back
-  local f st mo ve cu re fl im
+  local f st mo ve cu re fl im di
   local -a rows=() labels=()
-  while IFS='|' read -r f st mo ve cu re fl im; do
-    rows+=("$f|$st|$mo|$ve|$cu|$re|$fl|$im")
+  while IFS='|' read -r f st mo ve cu re fl im di; do
+    rows+=("$f|$st|$mo|$ve|$cu|$re|$fl|$im|$di")
     if [ "$st" = ok ]; then labels+=("$f|$re"); else labels+=("$f|not offered: $re"); fi
   done < <($BP list "$STORAGE_MNT/BIOS" 2>>"$LOG")
   if [ ${#rows[@]} -eq 0 ]; then
     say_wrapped "No BIOS packages" "There is no BIOS package in the folder BIOS on DIAGDATA ($(basename "$DD_PART"))." "" \
-      "Copy the folder from Dynabook there as it comes - named like X30L-M_B210_USB, with ShellFlash64.efi and the .bin file in it."
+      "Copy the folder from Dynabook there as it comes - named like X30L-M_B210_USB, with the flasher (ShellFlash64.efi or ChgFirmA.efi) and the .bin file in it."
     return 1
   fi
   while :; do
     tui_menu "BIOS update - which package?" "this laptop: $($BP model), BIOS $($BP current)" "${labels[@]}" || return 1
-    IFS='|' read -r PK_FOLDER PK_STATE PK_MODEL PK_VER PK_CUR PK_REASON PK_FLASHER PK_IMAGE \
+    IFS='|' read -r PK_FOLDER PK_STATE PK_MODEL PK_VER PK_CUR PK_REASON PK_FLASHER PK_IMAGE PK_DIR \
       <<< "${rows[$((TUI_CHOICE-1))]}"
     [ "$PK_STATE" = ok ] && return 0
     tui_msg "Not offered" "$PK_FOLDER" "" "$PK_REASON"
@@ -265,7 +267,8 @@ write_script() {   # back-entry-number-or-empty
     printf '%s\n' "goto DONE"
     printf '%s\n' ":FOUND"
     [ -n "$1" ] && printf '%s\n' "setvar BootNext -guid $EFI_GLOBAL -bs -rt -nv =$(le16 "$1")"
-    printf '%s\n' 'cd "\BIOS\'"$PK_FOLDER"'"'
+    # PK_DIR: the folder, or the folder inside it Windows' Extract All made
+    printf '%s\n' 'cd "\BIOS\'"${PK_DIR//\//\\}"'"'
     printf '%s\n' "$PK_FLASHER $PK_IMAGE"
     printf '%s\n' 'echo " "'
     printf '%s\n' 'echo "Dynabook'"'"'s flasher has stopped: its message is above."'
