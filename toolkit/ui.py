@@ -488,16 +488,9 @@ class BarLive:
         total, seen = 0, False
         for d in self.devs:
             try:
-                if os.path.isdir("/sys/block/" + d):
-                    with open("/sys/block/%s/stat" % d) as f:
-                        v = f.read().split()
-                    total += int(v[2]) + int(v[6])      # sectors read, sectors written
-                else:
-                    # a network port (1.26): an image going to or coming from
-                    # OneDrive moves there, while the drive waits on it
-                    for c in ("rx_bytes", "tx_bytes"):
-                        with open("/sys/class/net/%s/statistics/%s" % (d, c)) as f:
-                            total += int(f.read())
+                with open("/sys/block/%s/stat" % d) as f:
+                    v = f.read().split()
+                total += int(v[2]) + int(v[6])          # sectors read, sectors written
                 seen = True
             except (OSError, ValueError, IndexError):
                 pass
@@ -1001,6 +994,14 @@ def _icon(name, d, cx, cy, size, col):
         ln(13.5, 9.8, 19, 9.8)
         ln(13.5, 12.6, 19, 12.6)
         ln(13.5, 15.4, 17, 15.4)
+
+    elif name == "bios":                                  # BIOS update - a chip, an arrow up
+        box(5, 5, 19, 19, 2.0)
+        for v in (8.5, 12, 15.5):                         # its pins, four sides
+            ln(v, 2.2, v, 5); ln(v, 19, v, 21.8)
+            ln(2.2, v, 5, v); ln(19, v, 21.8, v)
+        pl([(12, 16), (12, 9.4)])
+        d.polygon([(X(8.8), Y(11.4)), (X(15.2), Y(11.4)), (X(12), Y(7.6))], fill=col)
 
     elif name == "download":                              # get firmware
         pl([(12, 2.5), (12, 9.6)])

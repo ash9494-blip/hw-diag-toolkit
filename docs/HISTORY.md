@@ -3,6 +3,69 @@
 Newest first. Each entry says what changed and why; the "why" is usually a
 real machine on Ash's bench.
 
+## 1.28.0 — 2026-10-29
+- **OneDrive taken out** (Ash: "remove one drive function entirely"). Back
+  up, Restore, Check and Browse go straight to the USB drive list again, as
+  in 1.25; the sign-in, Disk imaging's OneDrive item, onedrive.py, odfs.py,
+  their tests and their packages (python3-fusepy, libfuse2) are gone, and
+  105 strings with them from the catalogues. Kept from that work: Settings
+  -> Date and time and the clock's boot watcher, DIAGDATA on a Ventoy stick
+  (stick_part_dev), the restore that failed on a folder with a space in its
+  name, and "Cannot look on ..." with the reason when the image list fails.
+  1.26's sign-in left on the stick (diag-onedrive.json, a live key to Ash's
+  work OneDrive, and onedrive.config) is overwritten and deleted at start,
+  once found; settings.log says so. Ash deletes the app registration in
+  Entra, which ends every sign-in made with it.
+- **BIOS update, tile 20** (Ash: "can you add one features is to update
+  BIOS in tools?"; his X30L-M_B210_USB package: Dynabook's ShellFlash64.efi
+  - Phoenix SCT Flash, a UEFI Shell program - and BIOS0126.bin, a UEFI
+  capsule; today he runs it from a FAT32 stick with the "`" key). Agreed
+  with Ash point by point, and invariant 4 changed with it: the toolkit
+  never writes firmware itself, it starts the maker's own flasher with the
+  maker's own image, for this model, newer only, after UPDATE is typed.
+  - Packages live in DIAGDATA\BIOS, a folder each as Dynabook names it;
+    biospkg.py offers only a folder with the flasher and one .bin whose
+    model (from the name) is this laptop's as its firmware says (a word of
+    its own - X30L-M is not X30L-MA) and whose version is newer than the
+    BIOS now. The others are listed with the reason, never started.
+  - Before UPDATE: the charger in, battery at least 30 %, a warning when
+    the laptop's drive has BitLocker (Windows asks for the recovery key
+    after a BIOS update), an offer to save the report (the restart ends the
+    session).
+  - Then the laptop restarts by itself into a UEFI Shell (EDK2's, on the
+    image as efi-shell-x64) copied to DIAGDATA with a script: it finds the
+    stick, sets the boot after it back to the stick, and runs Dynabook's
+    flasher as Dynabook made it - no options. If the flasher stops, its
+    message waits for a key, then the laptop restarts back. Back in the
+    toolkit, after the Language menu, a page says updated or not
+    (2.00 -> 2.10, or "still 2.00"), and the report says it too; the two
+    boot entries and the files are removed.
+  - Found in the VM on the way: a dd-written ISO stick hides its other
+    partitions from the firmware (El Torito) - the tests use a stick laid
+    out like Ventoy's; firmware may delete boot entries its boot order does
+    not list (OVMF did, and the laptop started its own Shell instead of the
+    stick) - the way-back entry now sits last in the boot order until the
+    toolkit is back; the Shell's echo took " - " for an option.
+  - From the review before delivery: every toolkit start removes boot
+    entries an update left, even with no note on this stick (a start from
+    another stick must not leave the flasher one restart away); nothing
+    restarts unless the Shell's script reads back whole; a countdown with
+    no way back set says to start the stick with F12; names with spaces or
+    signs ("BIOS0126 (1).bin") are listed, not offered - the Shell's script
+    runs them as written; the model is matched on the firmware's product
+    name, version and board, not its family (a series name); Q on the check
+    page goes back to the packages instead of "Not ready".
+  - VM only (OVMF dressed as an X30L-M on 2.00): the whole round, Dynabook's
+    flasher refusing a non-Dynabook - back on the stick by itself with the
+    firmware's own Shell first in the boot order, "FAIL still 2.00", and
+    after a power loss on that page the result came again at the next
+    start, cleaned up only after Enter. Also seen: a planted leftover entry
+    and its BootNext cleared at start, the copied folder listed and not
+    offered, Q back to the packages, Disk imaging without OneDrive (Back up
+    and Restore straight to the USB list); imaging-loop.sh 111 passed. The
+    first real flash is Ash's, on a bench X30L-M.
+  - Delivered: SHA256 639a00bafacd8204c535cfd1727cbeb5dd88959c05006479a4aaa65b192cd961.
+
 ## 1.27.0 — 2026-10-21
 - **A way out of Full run and Run them all** (Ash: "make a choice to exit
   when i select full test, whether on main full test or peripheral full

@@ -1,12 +1,10 @@
 #!/bin/bash
 # The laptop's clock: set from the internet's time when a connection is up, or
-# by hand. A wrong clock fails secure websites (OneDrive's sign-in among them),
+# by hand. A wrong clock fails secure websites (1.26's OneDrive sign-in did),
 # so this runs on its own whenever the laptop is online, and from Settings.
 #
 #   clock.sh watch          the background watcher menu.sh starts at boot
-#   clock.sh sync           set it from the internet if it is out (exit 0 / 1);
-#                           nothing when it was found right in the last 5 min
-#   clock.sh screen         the Settings screen (also called from OneDrive)
+#   clock.sh screen         the Settings screen
 #
 # The internet's time comes from the Date header of a plain web address, not
 # from an HTTPS one: HTTPS checks the clock, so it cannot be used to fix it. A
@@ -21,7 +19,6 @@ CLOCK_LOG=${RUN_DIR:-/run/diag}/clock.log
 CLOCK_STEP=60                 # seconds out before the clock is moved
 CLOCK_EVERY=300               # seconds between automatic checks while online
 CLOCK_PID=${RUN_DIR:-/run/diag}/clock-watch.pid
-CLOCK_OK=${RUN_DIR:-/run/diag}/clock.ok   # seconds since boot of the last internet time
 CLOCK_URLS="http://www.msftconnecttest.com/connecttest.txt http://connectivitycheck.gstatic.com/generate_204"
 
 clock_log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$CLOCK_LOG" 2>/dev/null; }
@@ -53,25 +50,12 @@ clock_set_epoch() {
 clock_sync() {
   local force=${1:-0} e now skew abs
   e=$(clock_net_epoch) || { clock_log "sync: no internet time"; return 1; }
-  cut -d. -f1 /proc/uptime > "$CLOCK_OK" 2>/dev/null
   now=$(date -u +%s); skew=$(( e - now )); abs=${skew#-}
   if [ "$force" = 1 ] || [ "$abs" -gt "$CLOCK_STEP" ]; then
     clock_set_epoch "$e" || return 1
     clock_log "set from the internet: was $abs s $( [ "$skew" -lt 0 ] && echo behind || echo ahead )"
   fi
   return 0
-}
-
-# OneDrive's look before it signs in or opens. Not when the internet's time
-# was had in the last CLOCK_EVERY s (the watcher's, or the last open's): a
-# network that blocks plain web addresses made every open wait up to 16 s
-# for two answers that never come (review, 1.26). Only a time actually had
-# counts - a "no internet" from before the Wi-Fi was joined must not skip it.
-clock_sync_recent() {
-  local last now
-  last=$(cat "$CLOCK_OK" 2>/dev/null); now=$(cut -d. -f1 /proc/uptime)
-  [ -n "$last" ] && [ $(( now - last )) -lt "$CLOCK_EVERY" ] && return 0
-  clock_sync 0
 }
 
 # Set by hand, from "YYYY-MM-DD" and "HH:MM" as the clock reads on this bench.
@@ -134,7 +118,6 @@ clock_screen() {
 
 case "${1:-}" in
   watch)  clock_watch ;;
-  sync)   clock_sync_recent ;;
   screen) . /opt/diag/lib.sh; . /opt/diag/tui.sh; clock_screen ;;
-  *)      sed -n '2,11p' "$0" ;;
+  *)      sed -n '2,9p' "$0" ;;
 esac

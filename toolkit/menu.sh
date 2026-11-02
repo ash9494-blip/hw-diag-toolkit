@@ -62,6 +62,7 @@ if [ ! -f "$RUN_DIR/.seeded" ]; then
     v=$(setting_get layout "")
     [ -n "$v" ] && printf '%s\n' "$v" > "$RUN_DIR/layout"
   fi
+  forget_onedrive     # 1.26's sign-in on the stick: OneDrive is gone (1.28)
   # The clock, set from the internet whenever there is a connection (Ash,
   # 1.26: OneDrive's sign-in failed on a laptop whose clock was wrong). fd 8
   # closed: a daemon holding the menu's lock stops the menu restarting.
@@ -78,6 +79,9 @@ daemon_alive || /opt/diag/start-ui.sh || set_console_font
 # settings, so it opens on the language used last time. Not on the text
 # console: that has no CJK font and stays English.
 [ -n "$NEW_BOOT" ] && [ -n "$TUI_GUI" ] && /opt/diag/settings.sh --boot-language
+# Back from a BIOS update started here (tile 20): updated or not, before
+# anything else (1.28, Ash: "after updates it will come back to the toolkit")
+[ -n "$NEW_BOOT" ] && /opt/diag/biosupdate.sh --result
 
 if [ ! -f "$RUN_DIR/.seeded" ]; then
   /opt/diag/sysinfo.sh --quiet
@@ -358,6 +362,7 @@ run_test() {   # one dispatcher, so both layouts stay in step
     system)   /opt/diag/sysinfo.sh ;;
     dmi)      /opt/diag/dmicapture.sh ;;
     imaging)  /opt/diag/imaging.sh ;;
+    bios)     /opt/diag/biosupdate.sh ;;
     drivers)  /opt/diag/drivercheck.sh ;;
     results)  view_report ;;
     save)     /opt/diag/savereport.sh ;;
@@ -415,7 +420,8 @@ peripherals_menu() {
 compact_menu() {
   # GPU beside CPU and RAM as tile 5 (Ash, 1.24); Disk imaging beside Keyboard
   # (1.22) - it was last, 18
-  local acts=(fullrun disk cpu ram gpu battery keyboard imaging peripherals showall wificonnect drivers dmi results save shell system settings errlog)
+  # BIOS update the 20th, the grid's last free place (1.28)
+  local acts=(fullrun disk cpu ram gpu battery keyboard imaging peripherals showall wificonnect drivers dmi results save shell system settings errlog bios)
   tui_grid "Choose a test" "arrows or its number (two digits for 10+), Enter to select      Q = power menu" \
     "Full run|play" \
     "HDD / SSD|disk|$(test_result DISK_RESULT DISK_CTRL DISK_SELFTEST DISK_SMART)" \
@@ -427,7 +433,8 @@ compact_menu() {
     "Disk imaging|clone|$(test_result IMAGING_RESULT)" \
     "Peripherals|grid" "Show all tests|expand" "Wi-Fi|wifi" \
     "Driver check|download|$(test_result DRIVER_RESULT)" "DMI capture|chip" "Results|list" "Save report|save" "Command prompt|terminal" \
-    "System|info" "Settings|gear" "Error log|log|$(test_result ERRLOG_RESULT)" || return 1
+    "System|info" "Settings|gear" "Error log|log|$(test_result ERRLOG_RESULT)" \
+    "BIOS update|bios|$(test_result BIOS_RESULT)" || return 1
   case "${acts[$((TUI_CHOICE-1))]}" in
     peripherals) peripherals_menu ;;
     showall)     set_layout all ;;
@@ -437,7 +444,7 @@ compact_menu() {
 }
 
 expanded_menu() {
-  local acts=(fullrun disk cpu ram gpu battery keyboard imaging screen touchpad touchscreen sound usb charging camera sdcard lid fan network wificonnect wireless drivers errlog dmi results save shell system settings)
+  local acts=(fullrun disk cpu ram gpu battery keyboard imaging screen touchpad touchscreen sound usb charging camera sdcard lid fan network wificonnect wireless drivers errlog dmi results save shell system settings bios)
   tui_grid "Every test" "arrows or its number, Enter to select      Q = back to the short list" \
     "Full run|play" \
     "HDD / SSD|disk|$(test_result DISK_RESULT DISK_CTRL DISK_SELFTEST DISK_SMART)" \
@@ -459,7 +466,7 @@ expanded_menu() {
     "Driver check|download|$(test_result DRIVER_RESULT)" \
     "Error log|log|$(test_result ERRLOG_RESULT)" "DMI capture|chip" \
     "Results|list" "Save report|save" "Command prompt|terminal" \
-    "System|info" "Settings|gear" \
+    "System|info" "Settings|gear" "BIOS update|bios|$(test_result BIOS_RESULT)" \
     || { set_layout compact; return 0; }
   run_test "${acts[$((TUI_CHOICE-1))]}"
   return 0

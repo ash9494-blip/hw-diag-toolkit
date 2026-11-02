@@ -16,7 +16,7 @@
 # needs silencing here.
 exec 8>&-
 
-DIAG_VERSION="1.27.0"
+DIAG_VERSION="1.28.0"
 RUN_DIR=/run/diag
 REPORT_TXT="$RUN_DIR/report.txt"
 SUMMARY_KV="$RUN_DIR/summary.kv"
@@ -579,7 +579,56 @@ keep_settings() {
   return 1
 }
 
+# 1.26's OneDrive sign-in left on the stick: diag-onedrive.json is a live
+# key to Ash's work OneDrive, onedrive.config its app's IDs. 1.28 took
+# OneDrive out, and with it the Sign out that deleted them (Ash: erase them).
+# Overwritten before removal - FAT keeps a deleted file's clusters - at each
+# start, where any are found; settings.log says so.
+ONEDRIVE_LEFT="diag-onedrive.json diag-onedrive.json.new onedrive.config onedrive.config.new"
+forget_onedrive() {
+  local d f found opts
+  for d in $(settings_places); do
+    STORAGE_DEV=$d
+    mount_storage_ro || continue
+    found=""
+    for f in $ONEDRIVE_LEFT; do [ -e "$STORAGE_MNT/$f" ] && found="$found $f"; done
+    umount_storage
+    [ -n "$found" ] || continue
+    opts=$(findmnt -no OPTIONS --source "$d" 2>/dev/null | head -1)
+    if ! mount_storage; then
+      echo "onedrive: $d: cannot write, left$found ($(head -1 "$RUN_DIR/mnterr" 2>/dev/null))" >> "$RUN_DIR/settings.log"
+      continue
+    fi
+    for f in $found; do
+      shred -n1 -z -u "$STORAGE_MNT/$f" 2>>"$RUN_DIR/settings.log" || rm -f "$STORAGE_MNT/$f"
+    done
+    sync
+    case ",$opts," in *,ro,*) mount -o remount,ro "$STORAGE_MNT" 2>>"$RUN_DIR/settings.log" ;; esac
+    umount_storage
+    echo "onedrive: erased$found from $d" >> "$RUN_DIR/settings.log"
+  done
+  return 0
+}
+
 need_root() { [ "$(id -u)" = 0 ] || { bad "Must run as root"; exit 1; }; }
+
+# A typed confirmation (ERASE, SHRINK, UPDATE) is compared upper-cased.
+upper() { printf '%s' "$1" | tr '[:lower:]' '[:upper:]'; }
+
+# A message whose lines are too long for one screen row each. The renderer
+# wraps them (tui_para) after translating: folded here, the English pieces
+# matched no catalogue entry and Chinese has no spaces to fold at (1.21).
+# Here since 1.28 (it was imglib.sh's): the BIOS update says long things too.
+say_wrapped() {   # title text...
+  local title=$1 l row=6; shift
+  tui_frame "$title" "Enter to continue"
+  for l in "$@"; do
+    if [ -z "$l" ]; then row=$((row + 1)); continue; fi
+    row=$(tui_para "$row" "$l")
+  done
+  tui_flush
+  tui_anykey
+}
 
 # Keep the kernel from scribbling over the interface. Firmware on some laptops
 # emits a continuous stream of ACPI errors, and hung-task warnings appear

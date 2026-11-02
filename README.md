@@ -3,7 +3,9 @@
 Bootable USB/ISO for laptop bench testing: HDD/SSD (SMART, benchmark, install
 simulation, surface scan), CPU stress with temperatures, RAM stress +
 MemTest86+, battery drain, keyboard, touchpad, touchscreen, sound, USB ports,
-camera, Ethernet, Wi-Fi, DMI capture, and a saved per-machine report.
+camera, Ethernet, Wi-Fi, DMI capture, disk imaging (clone, back up, restore,
+Macrium images), BIOS update with the maker's own flasher, and a saved
+per-machine report.
 
 ```bash
 sudo ./setup-host.sh      # Ubuntu 24.04 / WSL2, once
