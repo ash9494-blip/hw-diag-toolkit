@@ -5,10 +5,11 @@ Bootable USB/ISO for bench-testing laptops at Data Dynamics (Johor). Owner: Ash
 minimal Ubuntu live system straight into a full-screen tile menu of hardware
 tests, and writes a per-machine report to the USB stick.
 
-**Current version: 1.26.0** (`toolkit/lib.sh` → `DIAG_VERSION`).
-Last delivered ISO: 1.26.0, SHA256 `79f1babdaaf4efe20de5abe72c0216a1a74c5daa3c4e514dba6c64d196d06e91`
-(asks "USB or OneDrive" first; with no app IDs built in, choosing OneDrive
-asks for them on screen and keeps them in the stick's onedrive.config).
+**Current version: 1.28.1** (`toolkit/lib.sh` → `DIAG_VERSION`).
+Last delivered ISO: 1.28.1, SHA256 `82218796a8681687a66938769ba8fec87d3fe200389e451dac12a1bb62c9bdb2`
+(BIOS update takes the X30L-K's ChgFirmA.efi packages and the folder
+Windows' Extract All makes; 1.28.0 took OneDrive out - its code is in git,
+d615508 - and added tile 20).
 Version history and the reasoning behind past changes: `docs/HISTORY.md`.
 
 ## Layout
@@ -80,16 +81,17 @@ toolkit/            everything that ends up in /opt/diag on the image
                     Browse; verify (tests: test/mrimg_test.py, run by the build)
   vendor/quicklz131.c  QuickLZ 1.31 (GPL) - Macrium 8's compression; the build
                     compiles it to /opt/diag/lib/libqlz.so on the host
-  onedrive.py       Ash's work OneDrive as an image store: device code sign-in
-                    (code typed on his phone), Microsoft Graph over http.client
-                    (kept-alive connections), find images (search + walk),
-                    mount/sync/umount; onedrive.conf = the app's two IDs
-                    (or onedrive.config on the stick)
-  odfs.py           OneDrive as a folder (FUSE via python3-fusepy, fsname
-                    "onedrive"): 8 MB ranged reads + read-ahead; a file being
-                    written is held in /dev/shm until closed (uploads need the
-                    size up front) - small ones until .diag-sync (tests:
-                    test/onedrive_test.py against test/fakegraph.py)
+  clock.sh          the clock: set from the internet (Date header of a plain
+                    web address) or by hand, written to the RTC; `watch` runs
+                    from boot and sets it whenever there is a connection
+  biosupdate.sh     BIOS update (tile 20): the maker's own flasher, started in a
+                    UEFI Shell after a restart (see invariant 4 and the
+                    BIOS convention); --result after the boot Language menu
+  biospkg.py        which packages in DIAGDATA\BIOS may be offered: model and
+                    version from the folder name, whole-word model match on
+                    DMI (name, version, board - not the series' family), newer
+                    only, names the Shell can run as written (tests:
+                    test/biospkg_test.py, run by the build)
   ui.py             Pillow framebuffer renderer (/dev/fb0), all screens + the
                     interactive tests (keyboard, pointer, touchscreen, camera)
   skins.py          the anime themes (mecha, kawaii): ui.py hands header,
@@ -156,9 +158,15 @@ radio, touchpad or battery. Say so when something is only VM-verified.
    graphics" entry has it.
 3. **`finalize_chroot.sh` before `build_iso.sh`**, and verify the built
    squashfs, not the source (build-all.sh does this).
-4. **Nothing is ever written to firmware/DMI/EEPROM.** Machine details edits
-   override the report only. DMI capture writes a `dmichg.txt` for Toshiba's
-   Windows tool SetDmiAll. Do not build a Linux DMI writer or reverse-engineer
+4. **The toolkit never writes firmware/DMI/EEPROM itself.** Since 1.28 (Ash,
+   agreed): a BIOS update may *start the maker's own flasher with the
+   maker's own image* (Dynabook's ShellFlash64.efi or ChgFirmA.efi + .bin;
+   ChgFirmA's /f is a force), only for the
+   matching model, only newer, after UPDATE is typed - never in Full run.
+   Never a force option, never a vendor binary in the ISO (they come from
+   Ash's stick). DMI writing stays banned: machine details edits override
+   the report only; DMI capture writes a `dmichg.txt` for Toshiba's Windows
+   tool SetDmiAll. Do not build a Linux DMI writer or reverse-engineer
    SetDmiAll/TVALZ.sys — deliberate decision, see `docs/dmi-board-swap.md`.
    Never redistribute Toshiba's SetDmiAll binaries.
 5. **Destructive disk tests require typing `ERASE`**, default to NO, and are
@@ -201,23 +209,32 @@ radio, touchpad or battery. Say so when something is only VM-verified.
 - Disk imaging: a list of drives or sticks goes through `pick_drive` /
   `pick_store` (imglib.sh) - they follow hot-plug (`tui_menu_watch`); set
   `JOB_DEVS` (the disks a job reads and writes) before `run_job`, or its
-  Flow bar has no drive to watch and never shows a stall. The store's side
-  is `$(store_io)`: its disk, or the network ports for OneDrive.
-- OneDrive is one more store: `pick_place` asks "USB or OneDrive" first (back
-  up, restore, check, browse - Ash: "it always ask me to plug in USB"; never
-  scratch space, which stays `pick_store`, USB only). USB goes to the drive
-  list, which waits for a plug-in (Q: back to the question); OneDrive with
-  no app IDs asks for them (`od_setup`, kept on the stick; asked again when
-  Microsoft refuses them, onedrive.py exit 4), then `STORAGE_DEV=onedrive`,
-  mounted at `/mnt/onedrive` by `od_mount` and left open until Disk imaging
-  exits (`od_close`). A backup there is not done until `od_sync` (the small
-  files go up last, the image's markers after them). Browse never copies
-  into OneDrive. The sign-in is kept on the stick (`diag-onedrive.json`) -
-  Ash's explicit choice; Disk imaging -> OneDrive signs out and deletes it
-  (shred first: FAT keeps deleted clusters). Only the boot stick's own
-  partitions hold or give it (`od_places`) - a stranger's DIAGDATA stick
-  must not bring its account; the build's app IDs win over the stick's; the
-  backup confirm shows the account from a live `/me` (`whoami --live`).
+  Flow bar has no drive to watch and never shows a stall. A step a person
+  waits on must read keys while it runs (background + `tui_wait_key`): a
+  page that reads none looks hung, and the keys pressed meanwhile answer the
+  pages after it (1.26's OneDrive search).
+- BIOS update (biosupdate.sh, 1.28): packages live in `DIAGDATA\BIOS\<folder
+  as Dynabook names it>` (X30L-M_B210_USB: ShellFlash64.efi + one .bin;
+  X30L-K_B860_..._USB: ChgFirmA.efi + one .BIN - also one folder down, as
+  Windows' Extract All leaves it),
+  DIAGDATA FAT32 - the firmware reads nothing else. Checks: model (biospkg,
+  DMI from /sys, never the report overrides), newer only, AC, battery >= 30
+  %, BitLocker warning, unsaved results, UPDATE typed. Then on DIAGDATA
+  `BIOS\.diag\` = EDK2 Shell + startup.nsh (CRLF; finds DIAGDATA by
+  pending.txt, `setvar BootNext` to the way back, runs the flasher, waits
+  for a key, `reset`) + the note; two efibootmgr entries made with `-C`:
+  the Shell, as BootNext only (never in BootOrder - a forgotten one must not
+  start the flasher again), and the way back to the stick's
+  \EFI\BOOT\BOOTX64.EFI, last in BootOrder. Nothing restarts unless
+  startup.nsh reads back whole (ends in `reset`); with no way back set, the
+  countdown says "start the stick with F12". `--result` (menu.sh, after the
+  Language menu) first drops both entries (and a BootNext pointing at one)
+  at every start, note or not - an entry left by a start from another stick
+  could run the flasher with nobody typing UPDATE - then matches the note by
+  serial, writes the RESULT line, and `undo_prepare` removes `.diag`. The
+  note is the only state across the restart: the report in RAM is lost -
+  offer to save first. Package and file names: letters, digits, `. _ -`
+  only - startup.nsh runs them as written (a space splits, `%` expands).
 - Report: `rsection`, `rsilent` → `/run/diag/report.txt`; one `RESULT:` line per
   test; `set_kv KEY value` → `summary.kv`.
 - Comments explain *why* (usually the bug that forced it). Keep that style.
@@ -233,7 +250,7 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   (each call restarts the loop), never inside the redraw loop. A phase that
   ends without a question or result screen (Full run's AUTO mode) must call
   `tui_anim_stop`. Keep the frame rate low where drawing would skew the
-  reading (battery drain fps=1, CPU idle baseline fps=2). Scenes play at 45
+  reading (battery drain fps=1, CPU idle baseline fps=2). Scenes play at 60
   fps (`ssdanim.FPS`), except while a test measures: scenes in `MEASURING`
   stay at 15 - add a new measuring scene there.
 - Network checks go out of the adapter under test (`ping -I`, `curl
@@ -276,6 +293,11 @@ radio, touchpad or battery. Say so when something is only VM-verified.
 - PIL `load_default()` is a fixed 11 px bitmap: a missing font = tiny text, no
   error. The build asserts the fonts exist.
 - Framebuffer is BGRX, not RGBX.
+- Write the framebuffer with write()/pwrite (`Framebuffer._write`), never
+  through the mmap: simpledrm's fbdev (any DRM fbdev) puts mmap stores on
+  screen only every 50 ms (deferred I/O, HZ/20) - the pointer and the
+  animations were stuck at 20 updates a second until 1.27, invisible in a
+  screenshot. A frame's period counts from its start, not its end.
 - ui.py: `_draw_grid` gets `d` not the canvas; `KDSETMODE/KD_TEXT/KD_GRAPHICS`
   constants must stay (deleting them silently drops to the text UI).
 - Daemons started by tests inherit fds: lib.sh closes fd 8 (menu's lock) so
@@ -316,7 +338,17 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   `/run/live/medium` - use `live_medium_dev`), and the
   partition holding the ISOs is locked (`mount /dev/sdb1` fails). Ventoy
   1.1.01+ maps that partition as a dm device named after it (`dm_named
-  sdb1`) - write through that, never the plain device.
+  sdb1`) - write through that, never the plain device. An older Ventoy does
+  not: `stick_part_dev` (lib.sh) then maps it itself as `diag-sdb1` (dm
+  linear over the whole partition) - Ash's onedrive.config on his DIAGDATA
+  was neither read nor kept before it (1.26).
+- hwclock is not in util-linux on noble but in util-linux-extra; a clock set
+  without it was lost at the next boot. The image's zone must be the bench's
+  (Asia/Kuala_Lumpur, finalize_chroot.sh) with /etc/adjtime LOCAL: on Etc/UTC
+  the RTC's local time passed for UTC, and writing a true time back would put
+  the customer's Windows 8 hours out. QEMU's RTC is UTC - test the clock with
+  `-rtc base=localtime`, as a Windows laptop keeps it. Time a watcher by /proc/uptime, not
+  by the clock it sets (a clock set back by years waited years).
 - Linux 7.0 (HWE) since 1.21; noble's 6.8 iwlwifi loads Intel firmware only
   up to API 86 and Panther Lake's (Z40L-P) starts at 101 - "firmware
   missing" with the file on the stick. 7.0 brought a VFIO "xe" directory
@@ -394,34 +426,60 @@ radio, touchpad or battery. Say so when something is only VM-verified.
 - NBD devices now allow partitions (`modprobe nbd`, no max_part=0): Restore
   from a Macrium image serves the whole drive and clones from nbdNp1...;
   the kernel's table scan needs `blockdev --rereadpt` + `udevadm settle`.
-- OneDrive (Graph): an upload must give its total size up front - no
-  streaming of unknown length - hence odfs.py's spool and the 256 MB backup
-  pieces (`split -a 3` below 1000 MB: two letters stop at 676 pieces). An
-  upload-session URL must NOT get the Authorization header (401); fragments
-  are multiples of 320 KiB; a fragment whose answer was lost is resent and
-  gets 416 - ask the session where to go on. Download links (`@microsoft.
-  graph.downloadUrl`) carry their own key and run out after about an hour;
-  never log a URL's query. Work-OneDrive search results often have no
-  `parentReference.path` (fetch the item) and search lags uploads by
-  minutes. Names ignore case. Debian's fusepy module is `fusepy`, not
-  `fuse`. A spool file must be unbuffered: `>>` appends at the size
-  getattr reported.
+- UEFI (BIOS update, 1.28, all found in the OVMF VM):
+  - A dd-written hybrid ISO starts with El Torito: the firmware then shows
+    its CD image and none of the partitions after it ("Not Found" for a
+    file on an added partition 3). Test on a stick laid out like Ventoy's
+    (plain GPT: EFI partition + the ISO in a partition + DIAGDATA) -
+    scratchpad mkuefistick.sh in the 1.28 session.
+  - Firmware may delete at start-up every Boot#### its BootOrder does not
+    list, sparing only the BootNext target (OVMF does; with a QEMU
+    `bootindex` it also rewrites BootOrder from QEMU's order every boot -
+    leave bootindex off to see a real laptop's behaviour). An entry that
+    must outlast the next boot goes last in BootOrder.
+  - EDK2 Shell: it runs `startup.nsh` from its own folder; `echo` takes a
+    bare ` - ` for an option (quote the words); `setvar BootNext -guid
+    8BE4DF61-93CA-11D2-AA0D-00E098032B8C -bs -rt -nv =0300` sets Boot0003
+    (two bytes, little-endian); `pause` quits the script on q.
+  - In the VM: test_power (a charger) is gone after every restart; type.py
+    drops letters on a busy VM - type a confirmation with slowtype.py.
+- Two sessions sharing this checkout: a build of one version from HEAD plus
+  its own files leaves out the other's uncommitted helpers. 1.26's
+  `od_stopkey` called `tui_wait_key` (1.27's tui.sh) - undefined in the 1.26
+  build, so the search page spun without ever reading a key. Check new
+  calls against the tui.sh that ships (`git show HEAD:toolkit/tui.sh`).
 
 ## Open items
 
-- **1.26.0 OneDrive on the real tenant** (tested only against
-  test/fakegraph.py: unit tests, a real FUSE mount in WSL, imaging-loop.sh
-  case onedrive - backup in 256 MB pieces, find, check, restore, a Macrium
-  image browsed off it). Still to see with Ash's app registration (he sends
-  the Application (client) ID and Directory (tenant) ID - into
-  onedrive.conf, or onedrive.config on the stick): the device code
-  sign-in on his phone (Conditional Access may block device code flow -
-  then his admin must allow it for this app), whether Microsoft's search
-  finds his .mrimg files by "mrimg", real upload/download speed on the
-  bench network and the CPU odfs.py costs, a restore of one of his real
-  Macrium images straight off OneDrive, the sign-in found again after a
-  reboot (Ventoy stick), and Sign out. Ask Ash before writing test data to
-  his OneDrive.
+- **1.27.0 on the bench** (offscreen + VM only): does the pointer feel smooth
+  on a real touchpad and mouse now that the framebuffer is written with
+  write() (QEMU's display cannot show the 50 ms it used to wait); the CPU a
+  60 fps animation costs on the slowest bench machine at 1080p (WSL: 13-32 ms
+  to draw a frame + 11-27 ms to convert it - frames are dropped, not
+  slowed); the Full run / Run them all pause on a real keyboard.
+
+- **1.28.0 BIOS update on the bench** (UEFI VM only: OVMF dressed as an
+  X30L-M on 2.00 via -smbios; Dynabook's flasher started there and refused
+  - "Unable to detect BIOS communication service channel"). First real
+  flash: Ash, on a bench X30L-M that is not a customer's. 1.28.1: the
+  X30L-K's ChgFirmA.efi (Ash's B860 package, VM only - OVMF answered its
+  UpdateCapsule "Unsupported"); a real X30L-K is the first chance to see
+  ChgFirmA's own capsule restart. To see: Ash's
+  DIAGDATA - Ventoy holds it, so it is probably his Ventoy partition,
+  exFAT, which the firmware cannot read (the toolkit then says so); a FAT32
+  DIAGDATA in Ventoy's reserved space, or a second stick labelled DIAGDATA,
+  are the ways out. The X30L-M's DMI product name (does "X30L-M" match as a
+  word?) and BIOS version format; whether Dynabook's firmware keeps the
+  way-back entry and honours BootNext across its capsule restart (else Ash
+  starts the stick with F12 - the result page still comes); whether the
+  flasher asks Y/N when started this way; settings after the flash (Ash:
+  Secure Boot stayed off with the "`" key method). 1.28 also shreds 1.26's
+  OneDrive sign-in from the stick at start (settings.log says so); Ash to
+  delete the app registration in Entra.
+
+- **1.26.1 on the bench** (VM only): Settings -> Date and time and the boot
+  watcher on a laptop with a flat CMOS cell; DIAGDATA read through Ventoy's
+  hold on Ash's own stick (the VM faked the hold with a dm device).
 
 - **1.25.0 imaging on the bench** (WSL loop drives, offscreen renders, the
   renderer driven over its FIFO, and the VM: two USB drives hot-plugged into

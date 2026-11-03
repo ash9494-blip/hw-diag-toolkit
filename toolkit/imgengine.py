@@ -249,8 +249,8 @@ def copy_boot_area(src_dev, tgt, plan, mbr_file=None, gap_file=None):
     """The boot code in front of the partition table (440 bytes - the disk
     signature and table after it are sfdisk's), and on an MBR disk whatever a
     boot loader keeps between it and the first partition."""
-    # quoted: an image on OneDrive sits in "Disk images/..." - the space split
-    # dd's if= and every restore from there failed here (1.26)
+    # quoted: a space in an image's folder ("Disk images/...", 1.26) split
+    # dd's if= and every restore from there failed here
     q = imgfmt.quote
     src = mbr_file or src_dev
     if src:
@@ -528,10 +528,8 @@ def save_part(job, q, imgdir, name, split_mb):
     job.undo.append(lambda: os.path.exists(tmpc) and os.remove(tmpc))
     frames = ("split -b %d --filter='zstd -q -T0 -3 -c > \"$TMPC\" && "
               "stat -c %%s \"$TMPC\" >> \"$IDX\" && cat \"$TMPC\"'" % imgfmt.CHUNK)
-    # two letters are 676 pieces: 2.7 TB at FAT32's 4000 MB, but only 173 GB
-    # at OneDrive's 256 MB - three letters there (imgfmt reads either)
-    out = ("split -a %d -b %dMB - %s." % (2 if split_mb >= 1000 else 3, split_mb, imgfmt.quote(prefix))
-           if split_mb else "cat > %s" % imgfmt.quote(prefix))
+    out = ("split -a 2 -b %dMB - %s." % (split_mb, imgfmt.quote(prefix)) if split_mb
+           else "cat > %s" % imgfmt.quote(prefix))
     open(idx, "w").close()
     os.environ["TMPC"], os.environ["IDX"] = tmpc, idx
     job.track("%s | %s | %s" % (reader, frames, out), "saving %s" % describe(q))
@@ -832,8 +830,8 @@ def rows(plan):
 
 
 def _line(*cells):
-    """One picker line. The notes come from the image - on OneDrive, from
-    anyone's upload: a line break in them would be a picker line of its own."""
+    """One picker line. The notes come from the image, written by whatever
+    made it: a line break in them would be a picker line of its own."""
     return "|".join(re.sub(r"[\x00-\x1f]", " ", str(x)).replace("|", "/") for x in cells)
 
 

@@ -520,7 +520,11 @@ smart_report() {
   controller_detail "$DISK" "$out"
   wear_report "$DISK" "$out"
 
-  tui_frame "SMART health - /dev/$DISK" "Enter to go back"
+  if [ -n "$SMART_HOLD" ]; then
+    tui_frame "SMART health - /dev/$DISK" "continuing automatically"
+  else
+    tui_frame "SMART health - /dev/$DISK" "Enter to go back"
+  fi
   local row=6
   case "$state" in
     PASSED)  tui_badge $row PASS "drive reports itself healthy" ;;
@@ -543,7 +547,14 @@ smart_report() {
     [ $row -gt $((TUI_ROWS-3)) ] && break
     tui_line $row "$(echo "$l" | cut -c1-$((TUI_W-6)))"; row=$((row+1))
   done < <(printf '%s' "$out" | grep -iE 'Power_On_Hours|Power On Hours|Power_Cycle_Count|Power Cycles|Reallocated_Sector|Current_Pending|CRC_Error|Wear_Leveling|Media_Wearout|Percentage Used|Available Spare|Temperature_Celsius|Temperature:' | sed 's/  */ /g')
-  tui_anykey "ENTER to go back"
+  # Full run: the page holds for a while, then the run goes on - it waited
+  # for Enter, and a Full run left alone stopped here (VM, 1.27)
+  if [ -n "$SMART_HOLD" ]; then
+    tui_flush
+    tui_wait_key "$SMART_HOLD"
+  else
+    tui_anykey "ENTER to go back"
+  fi
 }
 
 test_smart() { pick_disk || return; smart_report; }
@@ -603,7 +614,7 @@ if [ "$1" = "auto" ]; then
   DISK=$2
   [ -b "/dev/$DISK" ] || { echo "auto mode: /dev/$DISK not found"; exit 1; }
   TEST_SIZE=${3:-1G}; RUNS=${4:-1}; DEV=$DISK
-  smart_report
+  SMART_HOLD=10 smart_report
   rsection "DISK BENCHMARK (READ ONLY) -- /dev/$DISK"
   rsilent "Drive       : /dev/$DISK  ($(lsblk -dno SIZE,MODEL "/dev/$DISK" | sed 's/  */ /g'))"
   rsilent "Mode        : raw device, READ ONLY -- nothing is written, data is safe"

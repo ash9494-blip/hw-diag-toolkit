@@ -27,10 +27,12 @@ fonts, header and palette):
 """
 import math, os, random, sys, time
 
-# Target; a slow machine drops frames, the clock does not slow. 45 (Ash, 1.22:
-# 15 looked jerky) - a frame costs 15-22 ms on an i7-8665U at 1366x768-1080p.
-FPS = 45
-# A scene playing while its test MEASURES keeps 15: at 45 the drawing takes
+# Target; a slow machine drops frames, the clock does not slow. 60 (Ash, 1.27;
+# 45 in 1.22, when 15 looked jerky) - a frame costs 15-22 ms on an i7-8665U at
+# 1366x768-1080p. Until 1.27 the screen showed at most 20 of them a second
+# whatever this said: see Framebuffer._write.
+FPS = 60
+# A scene playing while its test MEASURES keeps 15: at 60 the drawing takes
 # most of a core, which a 2-core bench machine would take out of the disk,
 # RAM or CPU figures. The rest - waits, the charging steps, the explainers -
 # get the full rate. A test can still ask for fewer ("fps=1").
@@ -1874,7 +1876,9 @@ def play(scr, kb, pal, start="bench", kit=None):
             continue
         scr.fb.blit(frame(st, i, clock, paused, K))
         spent = time.time() - now
-        key, _ = kb.poll(1.0 if paused else max(0.01, 1.0 / FPS - spent))
+        # not at least 10 ms between frames: with a 15 ms frame, that held
+        # the 45 a second asked for to 40 (the keyboard is still read)
+        key, _ = kb.poll(1.0 if paused else max(0.002, 1.0 / FPS - spent))
         if key in (None, "hover", "wheelup", "wheeldown"):
             continue
         if key in ("esc", "q", "back", "backspace"):

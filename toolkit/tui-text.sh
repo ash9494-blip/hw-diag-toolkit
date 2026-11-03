@@ -284,6 +284,21 @@ tui_pager() {
 
 # ---------- abort helper -----------------------------------------------------
 # Returns 0 if the user pressed Q/ESC within <timeout> seconds.
+tui_wait_key() {   # as tui.sh's: TUI_KEY = the key within $1 s, or empty
+  TUI_KEY=""
+  local k
+  if [ -t 0 ]; then
+    IFS= read -rsn1 -t "$1" k 2>/dev/null || return 0     # timed out
+    case "$k" in
+      "") TUI_KEY=enter ;; $'\e') TUI_KEY=esc ;; ' ') TUI_KEY=space ;;
+      *)  TUI_KEY=${k,,} ;;
+    esac
+  else
+    sleep "$1"
+  fi
+  return 0
+}
+
 tui_wait_abort() {
   local t=$1 k
   if [ -t 0 ]; then

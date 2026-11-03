@@ -43,6 +43,10 @@ chroot $C apt-get install -y --no-install-recommends udhcpc >/dev/null 2>&1 \
 # cryptsetup opens BitLocker with the recovery key, dmsetup builds the scratch
 # area a shrink goes through. Every one is needed by some step of a clone, so
 # a missing one aborts here rather than halfway through a customer's drive.
+# OneDrive (1.26) is gone again (1.28, Ash: "remove one drive function
+# entirely"): its FUSE packages out of a chroot that outlives quick builds -
+# first, so the install and the checks below see what the purge took with it.
+chroot $C apt-get purge -y python3-fusepy libfuse2t64 2>&1 | tail -1
 chroot $C apt-get install -y --no-install-recommends partclone ntfs-3g gdisk fdisk \
     parted dosfstools exfatprogs cryptsetup-bin dmsetup 2>&1 | tail -2
 for t in partclone.ntfs partclone.vfat partclone.dd partclone.chkimg ntfsresize ntfscat \
@@ -51,13 +55,22 @@ for t in partclone.ntfs partclone.vfat partclone.dd partclone.chkimg ntfsresize 
     || { echo "BUILD ABORTED - $t did not install into the image" >&2; exit 1; }
 done
 echo "imaging tools present: partclone ntfs-3g sgdisk sfdisk parted cryptsetup dmsetup"
-# OneDrive as a place for images (1.26): odfs.py shows it as a folder through
-# FUSE - fusepy, on libfuse 2 (Debian names the module fusepy). The Graph and
-# sign-in side is Python's own urllib/http.client, nothing to install.
-chroot $C apt-get install -y --no-install-recommends python3-fusepy libfuse2t64 2>&1 | tail -1
-chroot $C python3 -c "import fusepy" 2>/tmp/fusepy.err \
-  || { echo "BUILD ABORTED - python3-fusepy does not load in the image: $(tail -1 /tmp/fusepy.err)" >&2; exit 1; }
-echo "OneDrive folder support present: fusepy + libfuse2"
+# BIOS update (biosupdate.sh, 1.28): the maker's own flasher runs in a UEFI
+# Shell after a restart - EDK2's Shell (BSD licence) is carried here and
+# copied to the stick's DIAGDATA, and efibootmgr makes the one-time boot
+# entries that start it and come back to the stick.
+chroot $C apt-get install -y --no-install-recommends efibootmgr efi-shell-x64 2>&1 | tail -1
+chroot $C sh -c "command -v efibootmgr" >/dev/null 2>&1 \
+  || { echo "BUILD ABORTED - efibootmgr did not install into the image" >&2; exit 1; }
+[ -s $C/usr/share/efi-shell-x64/shellx64.efi ] \
+  || { echo "BUILD ABORTED - the UEFI Shell (efi-shell-x64) is not in the image" >&2; exit 1; }
+echo "BIOS update support present: efibootmgr + UEFI Shell"
+# The clock (clock.sh): set from the internet or by hand, then written to the
+# hardware clock with hwclock - on noble that is in util-linux-extra, not
+# util-linux. Without it a time set here was lost at the next boot.
+chroot $C apt-get install -y --no-install-recommends util-linux-extra 2>&1 | tail -1
+chroot $C sh -c "command -v hwclock" >/dev/null 2>&1 \
+  || { echo "BUILD ABORTED - hwclock did not install into the image" >&2; exit 1; }
 
 # The touchpad driver chain. All of it ships in linux-modules(-extra); this is
 # here so a future trim can never quietly take a link out - a missing one
@@ -76,10 +89,10 @@ echo "touchpad driver chain present"
 # and disk imaging need from it is asserted, so a kernel change can never
 # quietly drop it: iwlmld (Intel Wi-Fi 7's driver), THC (the touchpad
 # controller on Lunar / Panther Lake), and dm-snapshot, loop, ntfs3 and nbd
-# (Browse an image serves a partition out of the image through it) and fuse
-# (OneDrive as a folder), which imaging builds on.
+# (Browse an image serves a partition out of the image through it), which
+# imaging builds on.
 case "$K" in [0-6].*) echo "BUILD ABORTED - kernel $K is older than 7.0 (bootstrap.sh installs linux-image-generic-hwe-24.04)" >&2; exit 1 ;; esac
-for m in iwlwifi iwlmld intel-thc intel-quicki2c dm-mod dm-snapshot loop ntfs3 nbd fuse; do
+for m in iwlwifi iwlmld intel-thc intel-quicki2c dm-mod dm-snapshot loop ntfs3 nbd; do
   find $C/usr/lib/modules/$K -name "$m.ko*" 2>/dev/null | grep -q . \
     || grep -q "/$m.ko" $C/usr/lib/modules/$K/modules.builtin 2>/dev/null \
     || { echo "BUILD ABORTED - kernel module missing from the image: $m" >&2; exit 1; }
@@ -198,8 +211,7 @@ mkdir -p $C/opt/diag
 # from the source since 1.15, was still in /opt/diag in 1.23.
 rm -f $C/opt/diag/*.sh $C/opt/diag/*.py
 cp $B/toolkit/*.sh $B/toolkit/*.py $C/opt/diag/
-# OneDrive's app registration (two IDs, no secret) - read by onedrive.py
-cp $B/toolkit/onedrive.conf $C/opt/diag/
+rm -f $C/opt/diag/onedrive.conf             # 1.26's, in a chroot that outlives quick builds
 # The icon artwork is data the renderer loads at draw time, so it has to travel
 # with the scripts. Missing it does not crash anything - _icon_smooth falls back
 # to drawing - which is exactly why its absence would go unnoticed until the
@@ -319,14 +331,12 @@ gcc -O2 -shared -fPIC -DCOMPRESSION_LEVEL=2 -Dmemory_safe \
     -o $C/opt/diag/lib/libqlz.so $B/toolkit/vendor/quicklz131.c \
   || { echo "BUILD ABORTED - libqlz.so did not build (gcc: setup-host.sh installs it)" >&2; exit 1; }
 cp $B/test/mrimg_test.py $C/tmp/test/
-# and OneDrive (onedrive.py, odfs.py) against test/fakegraph.py, a stand-in
-# for Microsoft's sign-in and Graph on 127.0.0.1: the sign-in, throttling, a
-# lost upload answer, and a backup written as the engine writes one. The
-# kernel mount itself is left to test/imaging-loop.sh (case onedrive).
-cp $B/test/onedrive_test.py $B/test/fakegraph.py $C/tmp/test/
+# and the BIOS update's choice of package (biospkg.py: the model and version
+# out of a folder name, which folders can be flashed, newer only)
+cp $B/test/biospkg_test.py $C/tmp/test/
 ln -sfn /opt/diag $C/tmp/toolkit
-for t in imgplan imgparted imgplanedit imgbrowse mrimg onedrive; do
-  if ! chroot $C env ODTEST_NO_MOUNT=1 python3 /tmp/test/${t}_test.py > /tmp/$t.out 2>&1; then
+for t in imgplan imgparted imgplanedit imgbrowse mrimg biospkg; do
+  if ! chroot $C python3 /tmp/test/${t}_test.py > /tmp/$t.out 2>&1; then
     echo "BUILD ABORTED - $t.py failed its tests:" >&2
     tail -15 /tmp/$t.out >&2
     exit 1
@@ -381,6 +391,15 @@ echo "sound: snd_hda_core gpu_bind=0 (Intel sound does not wait for the absent i
 # once Wi-Fi let timesyncd set the true time, the kernel would write UTC back
 # into the RTC - leaving the customer's Windows clock 8 hours out.
 printf '0.0 0 0.0\n0\nLOCAL\n' > $C/etc/adjtime
+# ... and local means the bench's zone (Johor, UTC+8). The image was left on
+# Etc/UTC, which only looked right while nothing set the clock: the RTC's
+# local time was taken for UTC. Once clock.sh set the true UTC from the
+# internet (1.26), hwclock wrote that UTC back as "local" - every laptop that
+# went online would have come back to Windows 8 hours slow.
+ln -sf /usr/share/zoneinfo/Asia/Kuala_Lumpur $C/etc/localtime
+echo Asia/Kuala_Lumpur > $C/etc/timezone
+[ -f $C/usr/share/zoneinfo/Asia/Kuala_Lumpur ] \
+  || { echo "BUILD ABORTED - the bench's time zone (Asia/Kuala_Lumpur) is not in the image" >&2; exit 1; }
 echo "diagtool" > $C/etc/hostname
 cat > $C/etc/hosts <<'EOF'
 127.0.0.1 localhost diagtool

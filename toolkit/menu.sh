@@ -62,6 +62,11 @@ if [ ! -f "$RUN_DIR/.seeded" ]; then
     v=$(setting_get layout "")
     [ -n "$v" ] && printf '%s\n' "$v" > "$RUN_DIR/layout"
   fi
+  forget_onedrive     # 1.26's sign-in on the stick: OneDrive is gone (1.28)
+  # The clock, set from the internet whenever there is a connection (Ash,
+  # 1.26: OneDrive's sign-in failed on a laptop whose clock was wrong). fd 8
+  # closed: a daemon holding the menu's lock stops the menu restarting.
+  setsid /opt/diag/clock.sh watch 8>&- </dev/null >/dev/null 2>&1 &
   NEW_BOOT=1
 fi
 
@@ -74,6 +79,9 @@ daemon_alive || /opt/diag/start-ui.sh || set_console_font
 # settings, so it opens on the language used last time. Not on the text
 # console: that has no CJK font and stays English.
 [ -n "$NEW_BOOT" ] && [ -n "$TUI_GUI" ] && /opt/diag/settings.sh --boot-language
+# Back from a BIOS update started here (tile 20): updated or not, before
+# anything else (1.28, Ash: "after updates it will come back to the toolkit")
+[ -n "$NEW_BOOT" ] && /opt/diag/biosupdate.sh --result
 
 if [ ! -f "$RUN_DIR/.seeded" ]; then
   /opt/diag/sysinfo.sh --quiet
@@ -118,37 +126,53 @@ full_run() {
     "5.  Hardware error log - what the tests shook out" \
     "6.  Save the report" \
     "" \
-    "Nothing is written to the tested drive. Each stage stops with Q." \
-    "" "Start now?" || return
+    "Nothing is written to the tested drive." \
+    "Q stops a stage. In the pause between stages, Q stops the run." \
+    "Start now?" || return
 
   /opt/diag/sysinfo.sh --quiet
   /opt/diag/drivercheck.sh --quiet
   /opt/diag/gputest.sh --quiet
 
-  if [ -n "$disk" ]; then
-    /opt/diag/disktest.sh auto "$disk" 1G 1
-  else
-    # No drive is a finding, not a reason to abandon the whole run.
-    tui_frame "Full run - storage" "continuing automatically"
-    tui_badge 6 UNKNOWN "no drive detected"
-    tui_line 9  "No internal drive was found, so the disk benchmark is skipped."
-    tui_line 10 "Check that the drive is seated, or run the disk test manually." muted
-    local i
-    for i in 5 4 3 2 1; do
-      tui_line 12 "Moving on to the CPU test in ${i}s" muted
-      tui_flush; sleep 1
-    done
+  local note=""
+  if [ -z "$disk" ]; then
+    # No drive is a finding, not a reason to abandon the whole run: said on
+    # the pause before the CPU test.
+    note="No internal drive was found, so the disk benchmark is skipped."
     rsection "DISK BENCHMARK"
     rsilent "RESULT: SKIPPED -- no internal drive was detected"
     set_kv DISK_RESULT "SKIPPED (no drive detected)"
+  else
+    run_gap "Full run" "Disk benchmark" "$FULLRUN_GAP" || { full_run_stopped "Disk benchmark"; return 0; }
+    /opt/diag/disktest.sh auto "$disk" 1G 1
   fi
 
+  run_gap "Full run" "CPU stress test" "$FULLRUN_GAP" "" "$note" || { full_run_stopped "CPU stress test"; return 0; }
   AUTO=1 /opt/diag/cputest.sh auto 10
+  run_gap "Full run" "RAM test" "$FULLRUN_GAP" || { full_run_stopped "RAM test"; return 0; }
   AUTO=1 /opt/diag/ramtest.sh auto 5
   # Last: what the stress tests shook loose into the kernel log.
   /opt/diag/errlog.sh --quiet
 
-  tui_frame "Full run complete" "Enter to save the report"
+  show_results "Full run complete" "Enter to save the report"
+  tui_anykey
+  /opt/diag/savereport.sh
+}
+
+# Stopped between two stages: what ran is in the report, and can be saved.
+full_run_stopped() {   # the stage that did not start
+  rsection "FULL RUN"
+  rsilent "Stopped by the operator before: $1 - it and the stages after it did not run."
+  show_results "Full run stopped" "Enter to save the report      Q = back without saving"
+  tui_keys q
+  case "$TUI_KEY" in q|esc) return 0 ;; esac
+  /opt/diag/savereport.sh
+  return 0
+}
+
+# The RESULT lines collected so far, one per test, coloured by verdict.
+show_results() {   # title hint
+  tui_frame "$1" "$2"
   local row=6 l
   while IFS= read -r l; do
     [ $row -gt 20 ] && break
@@ -161,8 +185,33 @@ full_run() {
     row=$((row+1))
   done < <(grep -E '^RESULT:|^SMART health:' "$REPORT_TXT")
   tui_flush
-  tui_anykey
-  /opt/diag/savereport.sh
+}
+
+# Between two stages of Full run, or two tests of Peripherals -> Run them all:
+# the way out of the rest of the run (Ash, 1.27: "make a choice to exit when
+# i select full test"). Q inside a test stops only that test, and the run went
+# straight on to the next. It goes on by itself after a few seconds, so a Full
+# run left alone still finishes. 0 = go on, 1 = stop the run.
+FULLRUN_GAP=5   # s - nobody need be at the bench
+PERI_GAP=3      # s - the peripheral tests need the operator there anyway
+run_gap() {   # title next-test seconds [count "2 of 12"] [note, in amber]
+  local i
+  tui_anim_stop      # a stage run in AUTO mode can leave its animation playing
+  for ((i = $3; i > 0; i--)); do
+    tui_frame "$1" "Enter = start now      Q = stop here"
+    tui_kv 7 "Next" "$2" accent
+    [ -n "$4" ] && tui_kv 8 "Test" "$4"
+    [ -n "$5" ] && tui_para 10 "$5" warn >/dev/null
+    tui_line 12 "Starting in ${i}s" muted
+    tui_para 13 "Q stops the run here. The tests already done stay in the report." muted >/dev/null
+    tui_flush
+    tui_wait_key 1
+    case "$TUI_KEY" in
+      q|esc)       return 1 ;;
+      enter|space) return 0 ;;
+    esac
+  done
+  return 0
 }
 
 view_report() {
@@ -313,12 +362,24 @@ run_test() {   # one dispatcher, so both layouts stay in step
     system)   /opt/diag/sysinfo.sh ;;
     dmi)      /opt/diag/dmicapture.sh ;;
     imaging)  /opt/diag/imaging.sh ;;
+    bios)     /opt/diag/biosupdate.sh ;;
     drivers)  /opt/diag/drivercheck.sh ;;
     results)  view_report ;;
     save)     /opt/diag/savereport.sh ;;
   esac
   [ -n "$rkey" ] && driver_followup "$1" "$rkey" "${n0:-0}"
   return 0
+}
+
+# A peripheral test's name as its tile says it (Run them all's pause).
+peri_label() {
+  case "$1" in
+    screen) echo Screen ;;         touchpad) echo Touchpad ;;   touchscreen) echo Touchscreen ;;
+    sound) echo Sound ;;           usb) echo "USB ports" ;;     charging) echo Charging ;;
+    camera) echo Camera ;;         network) echo "Ethernet Network" ;;
+    wireless) echo "Wireless test" ;; sdcard) echo "SD card" ;; lid) echo "Lid sensor" ;;
+    fan) echo Fan ;;               *) echo "$1" ;;
+  esac
 }
 
 # New tiles go at the end: the numbers already in Ash's hands stay put.
@@ -341,8 +402,15 @@ peripherals_menu() {
       "Lid sensor|lid|$(test_result LID_RESULT)" \
       "Fan|fan|$(test_result FAN_RESULT)" || return
     if [ "${acts[$((TUI_CHOICE-1))]}" = all ]; then
-      local t
-      for t in screen touchpad touchscreen sound usb charging camera network wireless sdcard lid fan; do run_test "$t"; done
+      local t n=0 all=(screen touchpad touchscreen sound usb charging camera network wireless sdcard lid fan)
+      for t in "${all[@]}"; do
+        n=$((n + 1))
+        # a pause before each test after the first, to stop the rest (1.27)
+        if [ $n -gt 1 ]; then
+          run_gap "Run them all" "$(peri_label "$t")" "$PERI_GAP" "$n of ${#all[@]}" || break
+        fi
+        run_test "$t"
+      done
     else
       run_test "${acts[$((TUI_CHOICE-1))]}"
     fi
@@ -352,7 +420,8 @@ peripherals_menu() {
 compact_menu() {
   # GPU beside CPU and RAM as tile 5 (Ash, 1.24); Disk imaging beside Keyboard
   # (1.22) - it was last, 18
-  local acts=(fullrun disk cpu ram gpu battery keyboard imaging peripherals showall wificonnect drivers dmi results save shell system settings errlog)
+  # BIOS update the 20th, the grid's last free place (1.28)
+  local acts=(fullrun disk cpu ram gpu battery keyboard imaging peripherals showall wificonnect drivers dmi results save shell system settings errlog bios)
   tui_grid "Choose a test" "arrows or its number (two digits for 10+), Enter to select      Q = power menu" \
     "Full run|play" \
     "HDD / SSD|disk|$(test_result DISK_RESULT DISK_CTRL DISK_SELFTEST DISK_SMART)" \
@@ -364,7 +433,8 @@ compact_menu() {
     "Disk imaging|clone|$(test_result IMAGING_RESULT)" \
     "Peripherals|grid" "Show all tests|expand" "Wi-Fi|wifi" \
     "Driver check|download|$(test_result DRIVER_RESULT)" "DMI capture|chip" "Results|list" "Save report|save" "Command prompt|terminal" \
-    "System|info" "Settings|gear" "Error log|log|$(test_result ERRLOG_RESULT)" || return 1
+    "System|info" "Settings|gear" "Error log|log|$(test_result ERRLOG_RESULT)" \
+    "BIOS update|bios|$(test_result BIOS_RESULT)" || return 1
   case "${acts[$((TUI_CHOICE-1))]}" in
     peripherals) peripherals_menu ;;
     showall)     set_layout all ;;
@@ -374,7 +444,7 @@ compact_menu() {
 }
 
 expanded_menu() {
-  local acts=(fullrun disk cpu ram gpu battery keyboard imaging screen touchpad touchscreen sound usb charging camera sdcard lid fan network wificonnect wireless drivers errlog dmi results save shell system settings)
+  local acts=(fullrun disk cpu ram gpu battery keyboard imaging screen touchpad touchscreen sound usb charging camera sdcard lid fan network wificonnect wireless drivers errlog dmi results save shell system settings bios)
   tui_grid "Every test" "arrows or its number, Enter to select      Q = back to the short list" \
     "Full run|play" \
     "HDD / SSD|disk|$(test_result DISK_RESULT DISK_CTRL DISK_SELFTEST DISK_SMART)" \
@@ -396,7 +466,7 @@ expanded_menu() {
     "Driver check|download|$(test_result DRIVER_RESULT)" \
     "Error log|log|$(test_result ERRLOG_RESULT)" "DMI capture|chip" \
     "Results|list" "Save report|save" "Command prompt|terminal" \
-    "System|info" "Settings|gear" \
+    "System|info" "Settings|gear" "BIOS update|bios|$(test_result BIOS_RESULT)" \
     || { set_layout compact; return 0; }
   run_test "${acts[$((TUI_CHOICE-1))]}"
   return 0

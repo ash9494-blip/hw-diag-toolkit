@@ -3,6 +3,186 @@
 Newest first. Each entry says what changed and why; the "why" is usually a
 real machine on Ash's bench.
 
+## 1.28.1 — 2026-11-02
+- **BIOS update: the X30L-K's packages** (Ash's photo: a PORTEGE X30L-K,
+  X30L-K_B860_12Gen_13Gen_USB "NOT OFFERED - not a USB BIOS package the
+  toolkit can run"). Dynabook ships two USB flashers: ShellFlash64.efi
+  (Phoenix, the X30L-M) and ChgFirmA.efi (its own capsule tool, every
+  X30L-K package B810..B860: `ChgFirmA [/f /d /h] [BIOS]`, checks the
+  board's "2nd ID" and the version itself, resets by itself after
+  UpdateCapsule). biospkg.py takes either, with the image as the one
+  argument; /f (force) is never given. Ash's copy also had the files one
+  folder down (Windows' Extract All: X30L-K_B860_..._USB inside a folder of
+  the same name) - a package folder holding nothing but one folder is
+  looked into, and startup.nsh changes into that inner folder (`list`
+  gains a 9th field, dir). A folder that is still no package now says
+  what is missing: no flasher (a Windows .exe cannot run here), no .bin,
+  or more than one of either.
+- VM (OVMF dressed as a PORTEGE X30L-K on 8.40, Ash's real B860 folder
+  one level down on a Ventoy-like stick): offered as 8.40 -> 8.60, UPDATE,
+  the Shell ran ChgFirmA V0.33 in the inner folder ("UpdateCapsule Done!
+  Status = Unsupported" - OVMF is no Dynabook, nothing written), back to
+  the stick by itself, "FAIL still 8.40", no Diag boot entries, no
+  BootNext, BIOS\.diag gone. Not seen yet: ChgFirmA on a real X30L-K
+  (its own capsule restart, whether it asks anything).
+- Delivered: SHA256 82218796a8681687a66938769ba8fec87d3fe200389e451dac12a1bb62c9bdb2
+
+## 1.28.0 — 2026-10-29
+- **OneDrive taken out** (Ash: "remove one drive function entirely"). Back
+  up, Restore, Check and Browse go straight to the USB drive list again, as
+  in 1.25; the sign-in, Disk imaging's OneDrive item, onedrive.py, odfs.py,
+  their tests and their packages (python3-fusepy, libfuse2) are gone, and
+  105 strings with them from the catalogues. Kept from that work: Settings
+  -> Date and time and the clock's boot watcher, DIAGDATA on a Ventoy stick
+  (stick_part_dev), the restore that failed on a folder with a space in its
+  name, and "Cannot look on ..." with the reason when the image list fails.
+  1.26's sign-in left on the stick (diag-onedrive.json, a live key to Ash's
+  work OneDrive, and onedrive.config) is overwritten and deleted at start,
+  once found; settings.log says so. Ash deletes the app registration in
+  Entra, which ends every sign-in made with it.
+- **BIOS update, tile 20** (Ash: "can you add one features is to update
+  BIOS in tools?"; his X30L-M_B210_USB package: Dynabook's ShellFlash64.efi
+  - Phoenix SCT Flash, a UEFI Shell program - and BIOS0126.bin, a UEFI
+  capsule; today he runs it from a FAT32 stick with the "`" key). Agreed
+  with Ash point by point, and invariant 4 changed with it: the toolkit
+  never writes firmware itself, it starts the maker's own flasher with the
+  maker's own image, for this model, newer only, after UPDATE is typed.
+  - Packages live in DIAGDATA\BIOS, a folder each as Dynabook names it;
+    biospkg.py offers only a folder with the flasher and one .bin whose
+    model (from the name) is this laptop's as its firmware says (a word of
+    its own - X30L-M is not X30L-MA) and whose version is newer than the
+    BIOS now. The others are listed with the reason, never started.
+  - Before UPDATE: the charger in, battery at least 30 %, a warning when
+    the laptop's drive has BitLocker (Windows asks for the recovery key
+    after a BIOS update), an offer to save the report (the restart ends the
+    session).
+  - Then the laptop restarts by itself into a UEFI Shell (EDK2's, on the
+    image as efi-shell-x64) copied to DIAGDATA with a script: it finds the
+    stick, sets the boot after it back to the stick, and runs Dynabook's
+    flasher as Dynabook made it - no options. If the flasher stops, its
+    message waits for a key, then the laptop restarts back. Back in the
+    toolkit, after the Language menu, a page says updated or not
+    (2.00 -> 2.10, or "still 2.00"), and the report says it too; the two
+    boot entries and the files are removed.
+  - Found in the VM on the way: a dd-written ISO stick hides its other
+    partitions from the firmware (El Torito) - the tests use a stick laid
+    out like Ventoy's; firmware may delete boot entries its boot order does
+    not list (OVMF did, and the laptop started its own Shell instead of the
+    stick) - the way-back entry now sits last in the boot order until the
+    toolkit is back; the Shell's echo took " - " for an option.
+  - From the review before delivery: every toolkit start removes boot
+    entries an update left, even with no note on this stick (a start from
+    another stick must not leave the flasher one restart away); nothing
+    restarts unless the Shell's script reads back whole; a countdown with
+    no way back set says to start the stick with F12; names with spaces or
+    signs ("BIOS0126 (1).bin") are listed, not offered - the Shell's script
+    runs them as written; the model is matched on the firmware's product
+    name, version and board, not its family (a series name); Q on the check
+    page goes back to the packages instead of "Not ready".
+  - VM only (OVMF dressed as an X30L-M on 2.00): the whole round, Dynabook's
+    flasher refusing a non-Dynabook - back on the stick by itself with the
+    firmware's own Shell first in the boot order, "FAIL still 2.00", and
+    after a power loss on that page the result came again at the next
+    start, cleaned up only after Enter. Also seen: a planted leftover entry
+    and its BootNext cleared at start, the copied folder listed and not
+    offered, Q back to the packages, Disk imaging without OneDrive (Back up
+    and Restore straight to the USB list); imaging-loop.sh 111 passed. The
+    first real flash is Ash's, on a bench X30L-M.
+  - Delivered: SHA256 639a00bafacd8204c535cfd1727cbeb5dd88959c05006479a4aaa65b192cd961.
+
+## 1.27.0 — 2026-10-21
+- **A way out of Full run and Run them all** (Ash: "make a choice to exit
+  when i select full test, whether on main full test or peripheral full
+  test"). Q inside a test stopped only that test, and the run went straight
+  on to the next. Now a pause before each long stage of Full run (disk
+  benchmark, CPU, RAM - 5 s) and before each peripheral test after the
+  first (Run them all - 3 s) says what comes next: Q there stops the run,
+  Enter starts the next at once, and left alone it goes on - an unattended
+  Full run still finishes. A stopped Full run shows what ran, offers to save
+  it, and says in the report where it was stopped. No internal drive is now
+  said on the pause before the CPU test (it had a 5 s screen of its own).
+  Full run's SMART page waited for Enter, so a Full run left alone never
+  got past it: it now holds 10 s and goes on (Enter sooner). Found when
+  this was taken over from the session that wrote it (VM).
+- **The screen shows the frames now** (Ash: "make the animation 60 frame per
+  second. also smoothen the display refresh rate as i see mouse move and
+  dont feel very smooth"). ui.py wrote the framebuffer through mmap. On
+  simpledrm - and every DRM driver's fbdev - a store through the mapping
+  reaches the screen only when the kernel's deferred I/O comes round,
+  HZ/20 = 50 ms after the first one (drm_fbdev_shmem.c, fb_defio.c): the
+  pointer and every animation were held to 20 updates a second, whatever
+  they were drawn at. Writes go through write() now, which the kernel sends
+  to the screen at once; the mapping stays as the fallback if write() is
+  refused.
+  - Animations at 60 a second (were 45); a scene playing while its test
+    measures stays at 15. Two timing slips fixed: the live animation waited
+    a whole period after a frame had finished (a 15 ms frame at 45 a second
+    came out at 27), and the "How it works" player at least 10 ms.
+  - The arrow is drawn at most 120 times a second, where the pointer is by
+    then - not once for every report (a 1000 Hz mouse asked for a thousand
+    small writes a second).
+  - Tried and dropped: writing only the rows of a frame that changed.
+    Finding them cost as much as converting the whole frame.
+
+## 1.26.1 — 2026-10-21
+Ash's first day with 1.26.0 on the bench.
+- **Date and time** (Ash: the OneDrive sign-in failed on a laptop whose
+  clock was wrong - "add a time adjustment in the toolkit, and let the date
+  and time auto sync if connect to internet"). `clock.sh`: Settings -> Date
+  and time sets the clock from the internet or by hand, and writes it to the
+  hardware clock (in local time, as Windows keeps it). A watcher started at
+  boot sets it from the internet whenever there is a connection (more than a
+  minute out). The time comes from the Date header of a plain web address -
+  HTTPS needs a right clock to work. OneDrive sets the clock before signing
+  in, and when Microsoft's certificate is still refused it offers the date
+  and time screen, then tries again. hwclock is in util-linux-extra on noble
+  (now installed and asserted by the build). The image's time zone is now
+  the bench's, Asia/Kuala_Lumpur: it was Etc/UTC, which only looked right
+  because the RTC's local time was taken for UTC - setting the true time and
+  writing it back would have left every customer's Windows 8 hours slow.
+- **The stick's DIAGDATA on Ventoy**: Ash's onedrive.config was not read and
+  the IDs he typed were "not kept on the stick". Ventoy holds the partition
+  its ISOs are on while one is booted (the plain device will not mount);
+  1.1.01 and later map it under its own name, an older Ventoy does not. The
+  toolkit now makes that mapping itself (`stick_part_dev` in lib.sh,
+  device-mapper linear over the whole partition, named diag-<part>) - the
+  settings kept on the stick go through it too.
+- **The OneDrive image list, fast and stoppable** (Ash: "i select 'Restore
+  image', the checking takes very long, and while im away, it go back to
+  image option page, when i want to quit by pressing esc button, it
+  hangs"). Measured on a slow fake Microsoft with Ash's eight Macrium
+  images: 135 s and 58 MB downloaded, now 13 s and 12 MB.
+  - Every image opened for its header got 8 MB blocks and three more
+    fetched ahead - 32 MB an image, and the next image's small reads queued
+    behind them. Big blocks now only once a file has been read 8 MB front to
+    back; a read never waits behind read-ahead (it fetches the piece itself),
+    and read-ahead for a closed file is dropped.
+  - The images are read several at once, and Microsoft's search runs while
+    the folders are listed.
+  - The search, "Opening OneDrive" and the wait for a sign-in code ran with
+    the page reading no keys: Esc did nothing, and the keys pressed meanwhile
+    answered the pages after it (the list's own menu, then Disk imaging).
+    Each now runs in the background on a page that shows how far it is and
+    stops on Q or Esc - so does sending a backup's last files. Leaving Disk
+    imaging says "Closing OneDrive..." and takes 30 s at most, whatever is
+    still waiting on Microsoft. The first build of this called a key
+    function that only exists in 1.27's tui.sh: the page spun without
+    reading a key (the VM caught it; the key wait is the renderer's own now).
+  - A dead link was six tries of up to a minute each; now a silent
+    connection is dropped after 30 s and given up on after 45 s (a restore's
+    or backup's own transfers keep trying for 3 minutes). A slow search no
+    longer fails the list - the folders are still read; a link that dies
+    while the images are read says so instead of listing each as "cannot
+    open: Input/output error".
+  - A sign-in Microsoft had ended made every look fail, each skipped as one
+    unreadable folder: "No images on OneDrive". It now says the sign-in
+    ended and offers to sign in again, and an unreadable top of the drive
+    says why.
+  - OneDrive asks the internet for the time before it opens only when it
+    has not had it in the last 5 minutes (a network blocking plain web
+    addresses cost every open up to 16 s), and moves the clock only when it
+    is more than a minute out.
+
 ## 1.26.0 — 2026-10-19
 - **OneDrive as a place for images** (Ash: "for image restore not only rely
   on usb, but also to search image on onedrive, and back up from there").

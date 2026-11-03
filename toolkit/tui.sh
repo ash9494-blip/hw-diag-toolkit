@@ -203,6 +203,11 @@ tui_keys() { _ask anykey "$1"; TUI_KEY=${UI_ANS:-enter}; }
 
 tui_pager() { _ask pager "$1" "$2"; }
 
+# Waits up to $1 seconds for a key: TUI_KEY is its name (enter, esc, q,
+# space, a letter or digit), empty when none came. Pointer movement does not
+# end it.
+tui_wait_key() { _ask waitkey "$1"; TUI_KEY=$(printf '%s' "$UI_ANS" | tr '[:upper:]' '[:lower:]'); }
+
 # Returns 0 when the operator pressed Q within the timeout.
 tui_wait_abort() {
   _ask waitkey "$1"
