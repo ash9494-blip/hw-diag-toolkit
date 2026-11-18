@@ -6,11 +6,14 @@ minimal Ubuntu live system straight into a full-screen tile menu of hardware
 tests, and writes a per-machine report to the USB stick.
 
 **Current version: 1.28.1** (`toolkit/lib.sh` → `DIAG_VERSION`).
-Last delivered ISO: 1.28.1, SHA256 `82218796a8681687a66938769ba8fec87d3fe200389e451dac12a1bb62c9bdb2`
-(BIOS update takes the X30L-K's ChgFirmA.efi packages and the folder
-Windows' Extract All makes; 1.28.0 took OneDrive out - its code is in git,
-d615508 - and added tile 20).
-Version history and the reasoning behind past changes: `docs/HISTORY.md`.
+1.28.0 took OneDrive out - its code is in git, d615508.
+Version history, the reasoning behind past changes and every delivered ISO's
+SHA256: `docs/HISTORY.md`.
+
+Project skills (`.claude/skills/`): **release** (delivering a version),
+**vm-test** (boot the ISO in QEMU and drive it), **bios-update** (tile 20 and
+its UEFI traps). Disk imaging notes: `docs/imaging-notes.md`. What still needs
+a real machine: `docs/OPEN.md`.
 
 ## Layout
 
@@ -106,7 +109,7 @@ toolkit/            everything that ends up in /opt/diag on the image
 test/               QEMU harness: boot-vm.sh, screenshot, keystrokes, QMP touch;
                     imaging-loop.sh (imaging end to end on loop drives, root);
                     i18n_extract.py (every on-screen string, for i18n/)
-docs/               HISTORY.md, dmi-board-swap.md
+docs/               HISTORY.md, OPEN.md, imaging-notes.md, dmi-board-swap.md
 ```
 
 ## Build
@@ -127,21 +130,9 @@ Secure Boot must be off (unsigned).
 
 ## Test
 
-```bash
-test/boot-vm.sh          # or: usb (boot from virtual stick), touch (multitouch)
-# wait 2-3 min - the first screen is the Language menu (every boot): Enter
-test/k.sh ret
-test/shot.sh home && open /tmp/diagvm/home.png
-test/k.sh 7 ret          # keys: digits, arrows, ret, q, esc ...
-```
-
-`test/boot-vm.sh` documents hot-plugging USB, touch input and typing. Also:
-- Wi-Fi without hardware: in the Command prompt tile,
-  `modprobe mac80211_hwsim radios=2`, then run `wpa_supplicant` on wlan1 with
-  `mode=2` (AP) — wlan0 can then scan and see it.
-- Camera: `modprobe vivid`.
-- After a change, always boot it and look. The build has a renderer smoke test,
-  but most UI regressions only show on screen.
+Boot it and look after every change - the `vm-test` skill (`test/boot-vm.sh`
+documents every mode). The build has a renderer smoke test, but most UI
+regressions only show on screen.
 
 **QEMU cannot catch graphics-driver faults** (see invariant 1) and has no real
 radio, touchpad or battery. Say so when something is only VM-verified.
@@ -212,29 +203,12 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   Flow bar has no drive to watch and never shows a stall. A step a person
   waits on must read keys while it runs (background + `tui_wait_key`): a
   page that reads none looks hung, and the keys pressed meanwhile answer the
-  pages after it (1.26's OneDrive search).
-- BIOS update (biosupdate.sh, 1.28): packages live in `DIAGDATA\BIOS\<folder
-  as Dynabook names it>` (X30L-M_B210_USB: ShellFlash64.efi + one .bin;
-  X30L-K_B860_..._USB: ChgFirmA.efi + one .BIN - also one folder down, as
-  Windows' Extract All leaves it),
-  DIAGDATA FAT32 - the firmware reads nothing else. Checks: model (biospkg,
-  DMI from /sys, never the report overrides), newer only, AC, battery >= 30
-  %, BitLocker warning, unsaved results, UPDATE typed. Then on DIAGDATA
-  `BIOS\.diag\` = EDK2 Shell + startup.nsh (CRLF; finds DIAGDATA by
-  pending.txt, `setvar BootNext` to the way back, runs the flasher, waits
-  for a key, `reset`) + the note; two efibootmgr entries made with `-C`:
-  the Shell, as BootNext only (never in BootOrder - a forgotten one must not
-  start the flasher again), and the way back to the stick's
-  \EFI\BOOT\BOOTX64.EFI, last in BootOrder. Nothing restarts unless
-  startup.nsh reads back whole (ends in `reset`); with no way back set, the
-  countdown says "start the stick with F12". `--result` (menu.sh, after the
-  Language menu) first drops both entries (and a BootNext pointing at one)
-  at every start, note or not - an entry left by a start from another stick
-  could run the flasher with nobody typing UPDATE - then matches the note by
-  serial, writes the RESULT line, and `undo_prepare` removes `.diag`. The
-  note is the only state across the restart: the report in RAM is lost -
-  offer to save first. Package and file names: letters, digits, `. _ -`
-  only - startup.nsh runs them as written (a space splits, `%` expands).
+  pages after it (1.26 shipped a search page that read no key).
+- BIOS update (biosupdate.sh / biospkg.py, 1.28): read the `bios-update`
+  skill first. The essentials: packages in `DIAGDATA\BIOS\<Dynabook's folder>`
+  on FAT32; the UEFI Shell entry is BootNext only, never in BootOrder; the way
+  back goes last in BootOrder; `--result` drops both entries at every start;
+  file names only letters, digits, `. _ -` (startup.nsh runs them as written).
 - Report: `rsection`, `rsilent` → `/run/diag/report.txt`; one `RESULT:` line per
   test; `set_kv KEY value` → `summary.kv`.
 - Comments explain *why* (usually the bug that forced it). Keep that style.
@@ -303,18 +277,15 @@ radio, touchpad or battery. Say so when something is only VM-verified.
 - Daemons started by tests inherit fds: lib.sh closes fd 8 (menu's lock) so
   `wpa_supplicant` etc can't keep the lock and stop the menu restarting.
 - `find -L /sys` hangs (circular symlinks) — use bounded globs.
-- `pkill -f qemu...` kills your own shell; kill by pid (see boot-vm.sh).
 - bash `read` with whitespace IFS collapses empty fields — use `|`.
+- VM harness traps (pkill kills your shell, vmmouse, Esc -> 1 = Reboot): the
+  `vm-test` skill.
 - A bare `exec` with redirections is permanent: `exec 8>&- 2>/dev/null` in
   lib.sh silenced stderr in every script and broke the Command prompt shell
   (1.11-1.12.0). Close fds with `exec 8>&-` alone.
 - Device-name matching must use word starts: "alps" matched QEMU's
   "VirtuALPS/2 VMware VMMouse" and made the mouse a "touchpad" (pointer dead,
   touchpad test found a pad in the VM). `\b(alps|elan|...)` in Pointer._devices.
-- In the VM, the active mouse is the absolute vmmouse: HMP `mouse_move` does
-  nothing visible; drive the pointer with QMP `input-send-event` type `abs`.
-  Esc/right-click on the home grid opens the power menu, where "1" = Reboot -
-  scripted key sequences have rebooted the VM into MemTest86+ twice.
 - Cable ports boot switched off, and an off port reports no carrier even
   with a cable in: `ip link set X up` before checking (`wired_online` in
   drivers.sh). Get firmware's "is a cable plugged in?" always said no.
@@ -340,8 +311,8 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   1.1.01+ maps that partition as a dm device named after it (`dm_named
   sdb1`) - write through that, never the plain device. An older Ventoy does
   not: `stick_part_dev` (lib.sh) then maps it itself as `diag-sdb1` (dm
-  linear over the whole partition) - Ash's onedrive.config on his DIAGDATA
-  was neither read nor kept before it (1.26).
+  linear over the whole partition) - before it (1.26), Ash's settings on
+  his DIAGDATA were neither read nor kept.
 - hwclock is not in util-linux on noble but in util-linux-extra; a clock set
   without it was lost at the next boot. The image's zone must be the bench's
   (Asia/Kuala_Lumpur, finalize_chroot.sh) with /etc/adjtime LOCAL: on Etc/UTC
@@ -380,11 +351,9 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   card-level element (badge-like, bar-like) needs a drawer in skins.py too.
   Look at both skins at 1024x768 and 150 % text (`skins.py --shots DIR`).
 
-- partclone: `-o FILE` refuses an existing file (even /dev/null) - use
-  `-O`; dev-to-dev (`-b`) compares the *partition* sizes, so a filesystem
-  already shrunk inside a big partition needs `-C`. `-I` copies an NTFS
-  marked for chkdsk (exact copy; never resize one). partclone.dd output has
-  no header (chkimg says "not partclone image") - check it through zstd.
+- Disk imaging traps (partclone flags, ntfsresize's chkdsk flag, NBD ioctls
+  and offsets, Macrium's layout): `docs/imaging-notes.md` - read it before
+  touching img*.py / mrimg.py.
 - Never parse a command's stdout+stderr together for a value: `losetup
   --show` printed a warning on stderr and it became part of the device name
   in a dm table. A loop over a file whose size is not a multiple of 512 warns.
@@ -395,54 +364,13 @@ radio, touchpad or battery. Say so when something is only VM-verified.
   from toolkit/ (getfirmware.sh, 1.15) still shipped in 1.23. finalize clears
   `/opt/diag/*.sh *.py` before copying; a build-tree sync must mirror
   toolkit/, not copy over it.
-- ntfsresize leaves the volume flagged for chkdsk (by design - Windows checks
-  once). Volumes the toolkit resized are listed by serial in
-  `$RUN_DIR/ntfs-resized.list` and scan as "ok"; any other flagged NTFS is
-  "dirty" and is never resized.
 - Never edit a bash script while it runs (`test/imaging-loop.sh` takes ~20
   min): bash reads it as it goes, and the run dies with exit 2 mid-way.
 - Pointer press / drag / release exist only while `kb.drag_mode` is on (the
   partition editor). Everywhere else a press is still "click" - a release
   arriving on the next screen would otherwise answer it.
-- Browse an image uses NBD's old ioctl interface on a socketpair (no
-  nbd-client): NBD_SET_SOCK and the other setup ioctls from one task,
-  NBD_DO_IT blocks in a thread for the whole connection. The bitmap's CRC32
-  (4 bytes) sits between the bitmap and the first block, and a checksum
-  follows every `blocks_per_checksum` blocks - offsets off by either read
-  plausible-looking garbage, which test/imgbrowse_test.py catches.
-  `fcntl.ioctl` passes a C int: NBD_SET_SIZE of anything over 2 GB
-  overflowed - imgbrowse's `ioctl()` goes through ctypes (unsigned long).
-- An image can only be read in the middle through diag/<part>.idx; the
-  reader refuses one whose frame sizes do not add up to the files (a lost
-  line would shift every offset after it).
-- Macrium .mrimg (mrimg.py): no published spec for Reflect 7/8 - the layout
-  came from the mrimg7z project and was checked against Ash's own image
-  and images Macrium made of known test disks (C:\Users\Ash\mrimg-test,
-  make-mrimg.ps1 - Macrium's command line wants the GPT disk GUID in upper
-  case). The u16 at metadata+8 is the split piece, +10 the incremental
-  number; "No compression" blocks carry no QuickLZ header; FAT partitions
-  keep their reserved sectors + FATs raw before the blocks. QuickLZ itself
-  never reports bad input - the per-block MD5 is the only check, keep it.
-- NBD devices now allow partitions (`modprobe nbd`, no max_part=0): Restore
-  from a Macrium image serves the whole drive and clones from nbdNp1...;
-  the kernel's table scan needs `blockdev --rereadpt` + `udevadm settle`.
-- UEFI (BIOS update, 1.28, all found in the OVMF VM):
-  - A dd-written hybrid ISO starts with El Torito: the firmware then shows
-    its CD image and none of the partitions after it ("Not Found" for a
-    file on an added partition 3). Test on a stick laid out like Ventoy's
-    (plain GPT: EFI partition + the ISO in a partition + DIAGDATA) -
-    scratchpad mkuefistick.sh in the 1.28 session.
-  - Firmware may delete at start-up every Boot#### its BootOrder does not
-    list, sparing only the BootNext target (OVMF does; with a QEMU
-    `bootindex` it also rewrites BootOrder from QEMU's order every boot -
-    leave bootindex off to see a real laptop's behaviour). An entry that
-    must outlast the next boot goes last in BootOrder.
-  - EDK2 Shell: it runs `startup.nsh` from its own folder; `echo` takes a
-    bare ` - ` for an option (quote the words); `setvar BootNext -guid
-    8BE4DF61-93CA-11D2-AA0D-00E098032B8C -bs -rt -nv =0300` sets Boot0003
-    (two bytes, little-endian); `pause` quits the script on q.
-  - In the VM: test_power (a charger) is gone after every restart; type.py
-    drops letters on a busy VM - type a confirmation with slowtype.py.
+- UEFI traps (El Torito hides partitions, firmware deleting unlisted boot
+  entries, EDK2 Shell syntax): the `bios-update` skill.
 - Two sessions sharing this checkout: a build of one version from HEAD plus
   its own files leaves out the other's uncommitted helpers. 1.26's
   `od_stopkey` called `tui_wait_key` (1.27's tui.sh) - undefined in the 1.26
@@ -451,147 +379,10 @@ radio, touchpad or battery. Say so when something is only VM-verified.
 
 ## Open items
 
-- **1.27.0 on the bench** (offscreen + VM only): does the pointer feel smooth
-  on a real touchpad and mouse now that the framebuffer is written with
-  write() (QEMU's display cannot show the 50 ms it used to wait); the CPU a
-  60 fps animation costs on the slowest bench machine at 1080p (WSL: 13-32 ms
-  to draw a frame + 11-27 ms to convert it - frames are dropped, not
-  slowed); the Full run / Run them all pause on a real keyboard.
-
-- **1.28.0 BIOS update on the bench** (UEFI VM only: OVMF dressed as an
-  X30L-M on 2.00 via -smbios; Dynabook's flasher started there and refused
-  - "Unable to detect BIOS communication service channel"). First real
-  flash: Ash, on a bench X30L-M that is not a customer's. 1.28.1: the
-  X30L-K's ChgFirmA.efi (Ash's B860 package, VM only - OVMF answered its
-  UpdateCapsule "Unsupported"); a real X30L-K is the first chance to see
-  ChgFirmA's own capsule restart. To see: Ash's
-  DIAGDATA - Ventoy holds it, so it is probably his Ventoy partition,
-  exFAT, which the firmware cannot read (the toolkit then says so); a FAT32
-  DIAGDATA in Ventoy's reserved space, or a second stick labelled DIAGDATA,
-  are the ways out. The X30L-M's DMI product name (does "X30L-M" match as a
-  word?) and BIOS version format; whether Dynabook's firmware keeps the
-  way-back entry and honours BootNext across its capsule restart (else Ash
-  starts the stick with F12 - the result page still comes); whether the
-  flasher asks Y/N when started this way; settings after the flash (Ash:
-  Secure Boot stayed off with the "`" key method). 1.28 also shreds 1.26's
-  OneDrive sign-in from the stick at start (settings.log says so); Ash to
-  delete the app registration in Entra.
-
-- **1.26.1 on the bench** (VM only): Settings -> Date and time and the boot
-  watcher on a laptop with a flat CMOS cell; DIAGDATA read through Ventoy's
-  hold on Ash's own stick (the VM faked the hold with a dm device).
-
-- **1.25.0 imaging on the bench** (WSL loop drives, offscreen renders, the
-  renderer driven over its FIFO, and the VM: two USB drives hot-plugged into
-  open Clone lists, C: shrunk + a new DATA made with E on the plan screen,
-  the clone read back PASS and checked from outside, the bar amber while the
-  target was throttled with `block_set_io_throttle` and moving again after).
-  Still to see on real hardware: a real USB drive
-  plugged in while a drive list is open, and a slow card reader (does the
-  list settle, or flicker as the size arrives); the plan screen's E editor
-  dragged on a real touchpad; a clone with sizes set by hand - C: shrunk,
-  WinRE grown, a new D: - booting Windows; the Flow bar's CPU on the
-  slowest bench machine during a compressed backup, and whether it freezes
-  amber on a drive that really stalls.
-
-- **1.24.0 fan and GPU on the bench** (VM only: QEMU's VGA, fake sensors
-  via `DIAG_HWMON_ROOT`). GPU: a laptop with a discrete GPU (Optimus /
-  hybrid) - does waking it through power/control bring it out of D3cold, do
-  its link lanes and AER counters read, and does a known-bad board show it.
-  Fan: which bench models report a speed at all (hwmon fan*_input, ACPI
-  `fan_speed_rpm`, Toshiba's `TOS*/fan` switch) - `sensors` on each.
-
-- **1.22.0 on the bench** (VM only): the pointer on a real touchpad and
-  mouse (does it feel smooth now - HOVER_SETTLE 60 ms, one-write cursor);
-  45 fps animations on the slowest bench machine (frames are dropped, not
-  slowed - check the CPU it costs); a failed peripheral test fetching real
-  firmware online (VM proved only a driver started from the stick: the
-  e1000 unbound, then the Ethernet test fixed it and passed on re-run); the
-  battery log on Ash's Ventoy stick (written through Ventoy's mapping,
-  found again after the laptop dies) - VM tested only the "No USB stick"
-  warning with a fake BAT0 (`DIAG_PS_ROOT`).
-
-- **1.23.0 Macrium images** (WSL loop drives + VM): restore one of Ash's real
-  Reflect 8 images onto a real laptop and boot Windows from it; Browse a
-  real customer image. Not supported yet, each refused with the reason:
-  split images (several .mrimg files - the last piece holds the index, and
-  the records do not say which piece a block is in), incremental /
-  differential images, password-protected ones, MBR images with logical
-  partitions, Reflect X (.mrimgx - Macrium publishes that format, MIT, at
-  github.com/macrium/mrimgx_file_layout, if Ash moves to Reflect X).
-
-- **1.21.0 Linux 7.0 on the bench** (VM only): every model needs a pass on
-  the new kernel - screen (simpledrm, invariant 1), sound with gpu_bind=0,
-  touchpad, Wi-Fi. First the PORTEGE Z40L-P: does its Wi-Fi now come up
-  (iwlmld + iwlwifi-sc-a0-wh-b0-c10x), its touchpad (THC), its sound (SOF
-  for Panther Lake may need newer firmware than noble ships)?
-- **1.21.0 first boot in the VM once stopped in initramfs** ("mounting /run on
-  /root/run failed", also /sys, /proc) under heavy host I/O; a reset booted.
-  Not seen in other boots. If it shows on a real stick, look at live-boot's
-  medium wait (dmesg at that prompt).
-- **1.21.0 languages**: machine translations (Haiku, from the brief and
-  glossary in the 1.21 session) - ask a native speaker of each to look
-  through the screens. Long translations may clip on tight screens at 150 %.
-- **1.21.0 More info page** on real hardware: PCIe ports/slots counts, Wi-Fi
-  standard from `iw phy`, permanent MAC via `ethtool -P` (QEMU: no PCIe, no
-  Wi-Fi).
-
-- **1.21.0 disk imaging on real hardware** (loop drives in WSL + VM only):
-  a cloned Windows actually booting (GPT and MBR), BitLocker unlock with a
-  real recovery key (cryptsetup BITLK - never run against a real volume),
-  the Key ID shown, a Ventoy stick as the image store, a real Clonezilla
-  restoring a toolkit image. The partition editor's drag on a real touchpad
-  (click and hold) and touchscreen; a moved C: booting Windows. Browse an
-  image: a real customer image (large NTFS, a hibernated or dirty C: - ntfs3
-  then ntfs-3g read-only), a BitLocker partition saved locked and unlocked
-  at browse time, copying to a second USB drive; Clonezilla's own images are
-  refused (no index) - restore them instead.
-
-- **1.20.1 settings on Ash's real Ventoy stick**: VM-tested only with a
-  DIAGDATA stick (kept, restored after reboot, cleared by Reset) and a
-  dd-written stick (honest "read-only image" message). Writing through
-  Ventoy's dm copy of its partition (1.1.01+) has never run - ask Ash which
-  message the theme change shows, and for `/run/diag/settings.log`.
-
-- **1.20 needs real-hardware checks** (VM-tested with fakes only):
-  - Wi-Fi per-antenna signal and retries on the AX201: does iwlwifi put
-    chains in `iw station dump`?
-  - the SD reader on a Realtek rtsx slot (bus mode from debugfs)
-  - the lid and tablet switches on a Dynabook
-  - the headphone jack on SOF (the A40-J) - does the switch report, and does
-    sound move to the headphones without PulseAudio?
-  - the PROCHOT MSR read
-  - the error log's rules against a real faulty machine
-  - the anime themes (mecha, kawaii) on a real panel: VM-checked at
-    1280x800 (switch, home, menus, live CPU test), the rest rendered
-    offscreen at 1024x768-1920x1080 and 150 % text
-
-- **1.15 needs real-hardware checks**: A40-J sound with gpu_bind=0 (and the
-  legacy-HDA fallback, never exercised); controller-check wake timing (QEMU
-  NVMe has no APST); Charging test on a real charger, DC jack and USB-C/UCSI
-  (VM-tested only with the `test_power` module).
-
-- **Wi-Fi on the real AX201 (`wlo1`)**: 1.11 scanning works on the A40-J
-  (attempt 1 timed out, attempt 2 found 26 APs). 1.12 fixes the "no address"
-  failure (dhclient `-timeout` bug); joining is not yet re-verified on the
-  real card. Ask Ash for the Toolkit log "wireless connections" section.
-- **Touchpad on the TECRA A40-J** reported "not found". Drivers are all in
-  the image; 1.12's driver search will say whether the firmware lists it,
-  disables it, or it is silent on I2C. Get that screen / log from Ash.
-- Never verified on real hardware: touchscreen test, USB-C/PD reporting (needs
-  UCSI), PCIe gen readout, two-finger right-click, run-from-RAM on a real stick,
-  install simulation, screen test. (Drive self-test: confirmed OK by Ash.)
-- Two-digit tile numbers wait only 0.7 s for the second digit (`_pick_number`).
-- Stress test elapsed display lags the progress bar (cosmetic).
-- WinPE companion ISO for SetDmiAll (Ash is installing the Windows ADK + WinPE
-  add-on): build script not yet written. It must take the path to Ash's own
-  extracted SetDmiAll folder; TVALZ.sys needs Secure Boot off.
-- Ideas raised but not built: fan RPM (check `sensors` on real models
-  first), keyboard LED test, Bluetooth scan, Windows 11 readiness (TPM),
-  idle gaps inside the install simulation.
+`docs/OPEN.md` - what each version still needs a real machine for. Add to it
+when something is only VM-verified; remove what Ash confirms.
 
 ## Delivering to Ash
 
-He copies `hw-diagnostic-toolkit vX.Y.Z.iso` to a Ventoy stick. Bump
-`DIAG_VERSION`, build, boot-test, then give him the SHA256. Keep a short
-changelog entry in `docs/HISTORY.md` per version.
+The `release` skill: bump `DIAG_VERSION`, build, boot-test, HISTORY entry,
+SHA256 to Ash (`hw-diagnostic-toolkit vX.Y.Z.iso`, for his Ventoy stick).
