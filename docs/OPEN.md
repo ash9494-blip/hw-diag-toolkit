@@ -24,9 +24,6 @@ answered its UpdateCapsule "Unsupported").
   still comes.) Does the flasher ask Y/N when started this way?
 - Settings after the flash (Ash: Secure Boot stayed off with the "`" key
   method).
-- **(ask Ash)** 1.28 shreds 1.26's OneDrive sign-in from the stick at start
-  (settings.log says so); Ash to delete the app registration in Entra.
-
 ## 1.27 (offscreen + VM only)
 
 - Does the pointer feel smooth on a real touchpad and mouse now that the
@@ -108,42 +105,22 @@ The pointer and frame-rate checks are covered by 1.27 above.
 - More info page: PCIe ports/slots counts, Wi-Fi standard from `iw phy`,
   permanent MAC via `ethtool -P` (QEMU: no PCIe, no Wi-Fi).
 
-## 1.20.1 settings on Ash's real Ventoy stick **(ask Ash)**
+## 1.20.1 settings on Ash's real Ventoy stick (still open)
 
 VM-tested only with a DIAGDATA stick (kept, restored after reboot, cleared by
 Reset) and a dd-written stick (honest "read-only image" message). Writing
 through Ventoy's dm copy of its partition (1.1.01+) has never run - ask Ash
 which message the theme change shows, and for `/run/diag/settings.log`.
+(2026-11-19: Ash does not remember the message - get settings.log from his
+stick the next time he boots it.)
 
-## 1.20 **(ask Ash)** (VM-tested with fakes only)
+## Older
 
-- Wi-Fi per-antenna signal and retries on the AX201: does iwlwifi put chains
-  in `iw station dump`?
-- The SD reader on a Realtek rtsx slot (bus mode from debugfs).
-- The lid and tablet switches on a Dynabook.
-- The headphone jack on SOF (the A40-J) - does the switch report, and does
-  sound move to the headphones without PulseAudio?
-- The PROCHOT MSR read.
-- The error log's rules against a real faulty machine.
-- The anime themes (mecha, kawaii) on a real panel: VM-checked at 1280x800,
-  the rest rendered offscreen at 1024x768-1920x1080 and 150 % text.
-
-## 1.15 **(ask Ash)**
-
-A40-J sound with gpu_bind=0 (and the legacy-HDA fallback, never exercised);
-controller-check wake timing (QEMU NVMe has no APST); Charging test on a real
-charger, DC jack and USB-C/UCSI (VM-tested only with `test_power`).
-
-## Older **(ask Ash)**
-
-- Wi-Fi on the real AX201 (`wlo1`): 1.11 scanning works on the A40-J
-  (attempt 1 timed out, attempt 2 found 26 APs). 1.12 fixes the "no address"
-  failure (dhclient `-timeout` bug); joining is not yet re-verified on the
-  real card. Ask Ash for the Toolkit log "wireless connections" section.
-- Touchpad on the TECRA A40-J reported "not found". Drivers are all in the
+- **Still open (Ash, 2026-11-19: still not found):** Touchpad on the TECRA
+  A40-J reported "not found". Drivers are all in the
   image; 1.12's driver search will say whether the firmware lists it,
   disables it, or it is silent on I2C. Get that screen / log from Ash.
-- Never verified on real hardware: touchscreen test, USB-C/PD reporting
+- **(ask Ash)** Never verified on real hardware: touchscreen test, USB-C/PD reporting
   (needs UCSI), PCIe gen readout, two-finger right-click, run-from-RAM on a
   real stick, install simulation, screen test. (Drive self-test: confirmed OK
   by Ash.)
